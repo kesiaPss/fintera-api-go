@@ -184,7 +184,22 @@ month; commissions keeps all periods and overdue is a current snapshot.
 | `/reports/total_revenue_csv` | `/reports/income_flow_export?format=csv` |
 | `/reports/overdue_payments_csv` | `/reports/overdue_export?format=csv` |
 
-The old endpoints were removed; `format` is now required on every replacement.
+`format` is required on every replacement endpoint.
+
+**Alias de compatibilidad temporales (deprecados)**
+
+The old paths are temporarily registered again as deprecated aliases so the
+existing staging UI stops returning `404`. They reuse the same builders and only
+fix `format=csv`; remove them after the UI migration is complete.
+
+| Alias deprecado | Reemplazo | Notas |
+| --- | --- | --- |
+| `/analytics/export` | `/reports/operations_export` | `format` is optional and defaults to `csv`; accepts `project_id`, `start_date`, `end_date` |
+| `/reports/commissions_csv` | `/reports/commissions_export?format=csv` | Forwards `start_date`/`end_date`, always CSV |
+| `/reports/total_revenue_csv` | `/reports/income_flow_export?format=csv` | Forwards `project_id`, `start_date`/`end_date`, always CSV |
+| `/reports/overdue_payments_csv` | `/reports/overdue_export?format=csv` | Snapshot: ignores dates, always CSV |
+
+These aliases are temporary and must be deleted once no client calls them.
 
 ### Any authenticated user
 
