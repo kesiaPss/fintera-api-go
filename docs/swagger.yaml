@@ -1364,6 +1364,55 @@ paths:
       summary: Get Lot Distribution
       tags:
       - Analytics
+  /analytics/export:
+    get:
+      description: 'Alias de compatibilidad (deprecado): use /reports/operations_export.
+        Se mantiene temporalmente para clientes antiguos y se eliminará tras la migración
+        de la UI. Si se omite format, el formato por defecto es csv.'
+      parameters:
+      - description: Formato de exportación (xlsx, csv, pdf). Por defecto, csv
+        in: query
+        name: format
+        type: string
+      - description: ID del proyecto
+        in: query
+        name: project_id
+        type: integer
+      - description: Fecha inicial (AAAA-MM-DD o RFC3339). Por defecto, el primer
+          día del mes actual
+        in: query
+        name: start_date
+        type: string
+      - description: Fecha final (AAAA-MM-DD o RFC3339). Por defecto, el último día
+          del mes actual
+        in: query
+        name: end_date
+        type: string
+      produces:
+      - application/octet-stream
+      - text/csv
+      responses:
+        "200":
+          description: reporte_operaciones_<período>.<formato>
+          schema:
+            type: file
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Exportar Reporte de Operaciones (alias heredado)
+      tags:
+      - Reports
   /analytics/overview:
     get:
       description: Returns high-level statistics and trend data
@@ -4616,6 +4665,46 @@ paths:
       summary: Commissions List
       tags:
       - Reports
+  /reports/commissions_csv:
+    get:
+      description: 'Alias de compatibilidad (deprecado): use /reports/commissions_export?format=csv.
+        Se mantiene temporalmente para clientes antiguos y se eliminará tras la migración
+        de la UI. Siempre responde CSV.'
+      parameters:
+      - description: Fecha inicial (AAAA-MM-DD o RFC3339). Sin valor, incluye todos
+          los períodos
+        in: query
+        name: start_date
+        type: string
+      - description: Fecha final (AAAA-MM-DD o RFC3339). Sin valor, incluye todos
+          los períodos
+        in: query
+        name: end_date
+        type: string
+      produces:
+      - text/csv
+      responses:
+        "200":
+          description: reporte_comisiones_<período>.csv
+          schema:
+            type: file
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Exportar Reporte de Comisiones (alias heredado)
+      tags:
+      - Reports
   /reports/commissions_export:
     get:
       description: Genera el reporte de comisiones agrupado por vendedor en XLSX,
@@ -4816,6 +4905,74 @@ paths:
       security:
       - BearerAuth: []
       summary: Exportar Reporte de Pagos Vencidos
+      tags:
+      - Reports
+  /reports/overdue_payments_csv:
+    get:
+      description: 'Alias de compatibilidad (deprecado): use /reports/overdue_export?format=csv.
+        Se mantiene temporalmente para clientes antiguos y se eliminará tras la migración
+        de la UI. Es una foto del estado actual (sin filtros de fecha) y siempre responde
+        CSV.'
+      produces:
+      - text/csv
+      responses:
+        "200":
+          description: reporte_pagos_vencidos_<período>.csv
+          schema:
+            type: file
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Exportar Reporte de Pagos Vencidos (alias heredado)
+      tags:
+      - Reports
+  /reports/total_revenue_csv:
+    get:
+      description: 'Alias de compatibilidad (deprecado): use /reports/income_flow_export?format=csv.
+        Se mantiene temporalmente para clientes antiguos y se eliminará tras la migración
+        de la UI. Siempre responde CSV.'
+      parameters:
+      - description: ID del proyecto
+        in: query
+        name: project_id
+        type: integer
+      - description: Fecha inicial (AAAA-MM-DD o RFC3339). Sin valor, incluye todos
+          los períodos
+        in: query
+        name: start_date
+        type: string
+      - description: Fecha final (AAAA-MM-DD o RFC3339). Sin valor, incluye todos
+          los períodos
+        in: query
+        name: end_date
+        type: string
+      produces:
+      - text/csv
+      responses:
+        "200":
+          description: reporte_flujo_ingresos_<período>.csv
+          schema:
+            type: file
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Exportar Reporte de Flujo de Ingresos (alias heredado)
       tags:
       - Reports
   /reports/user_balance_pdf:
