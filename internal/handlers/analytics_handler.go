@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -14,14 +13,10 @@ import (
 
 type AnalyticsHandler struct {
 	analyticsSvc *services.AnalyticsService
-	exportSvc    *services.ExportService
 }
 
-func NewAnalyticsHandler(analyticsSvc *services.AnalyticsService, exportSvc *services.ExportService) *AnalyticsHandler {
-	return &AnalyticsHandler{
-		analyticsSvc: analyticsSvc,
-		exportSvc:    exportSvc,
-	}
+func NewAnalyticsHandler(analyticsSvc *services.AnalyticsService) *AnalyticsHandler {
+	return &AnalyticsHandler{analyticsSvc: analyticsSvc}
 }
 
 // @Summary Get Analytics Overview
@@ -93,56 +88,6 @@ func (h *AnalyticsHandler) Sellers(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, sellers)
-}
-
-// @Summary Export Analytics Data
-// @Description Generates and downloads analytics reports in various formats
-// @Tags Analytics
-// @Produce application/octet-stream
-// @Param format query string true "Report format (csv, xlsx, pdf)"
-// @Param project_id query int false "Project ID"
-// @Param start_date query string false "Start Date (ISO 8601)"
-// @Param end_date query string false "End Date (ISO 8601)"
-// @Security BearerAuth
-// @Router /analytics/export [get]
-func (h *AnalyticsHandler) Export(c *gin.Context) {
-	format := c.Query("format")
-	filters := h.parseFilters(c)
-
-	overview, err := h.analyticsSvc.GetOverview(c.Request.Context(), filters)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get overview data"})
-		return
-	}
-
-	dist, err := h.analyticsSvc.GetDistribution(c.Request.Context(), filters.ProjectID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get distribution data"})
-		return
-	}
-
-	var data []byte
-	var filename string
-
-	switch format {
-	case "csv":
-		data, filename, err = h.exportSvc.ExportCSV(c.Request.Context(), overview, dist)
-	case "xlsx":
-		data, filename, err = h.exportSvc.ExportXLSX(c.Request.Context(), overview, dist)
-	case "pdf":
-		data, filename, err = h.exportSvc.ExportPDF(c.Request.Context(), overview, dist)
-	default:
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid format (csv, xlsx, pdf)"})
-		return
-	}
-
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to generate %s: %v", format, err)})
-		return
-	}
-
-	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%s", filename))
-	c.Data(http.StatusOK, "application/octet-stream", data)
 }
 
 func (h *AnalyticsHandler) parseFilters(c *gin.Context) models.AnalyticsFilters {

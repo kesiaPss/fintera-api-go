@@ -145,11 +145,11 @@ Claimed authorization errors return `403` with `No tienes acceso a esta sección
 | `GET` | `/analytics/distribution` |
 | `GET` | `/analytics/performance` |
 | `GET` | `/analytics/sellers` |
-| `GET` | `/analytics/export` |
 | `GET` | `/reports/commissions` |
-| `GET` | `/reports/commissions_csv` |
-| `GET` | `/reports/total_revenue_csv` |
-| `GET` | `/reports/overdue_payments_csv` |
+| `GET` | `/reports/operations_export` |
+| `GET` | `/reports/commissions_export` |
+| `GET` | `/reports/overdue_export` |
+| `GET` | `/reports/income_flow_export` |
 | `GET` | `/reports/user_balance_pdf` |
 | `GET` | `/reports/user_promise_contract_pdf` |
 | `GET` | `/reports/user_rescission_contract_pdf` |
@@ -157,6 +157,34 @@ Claimed authorization errors return `403` with `No tienes acceso a esta sección
 | `GET` | `/reports/customer_record_pdf` |
 | `GET` | `/dashboard/seller` |
 | `GET` | `/audits` |
+
+#### Report export endpoints
+
+All four exports require `format` (`xlsx`, `csv`, or `pdf`) and return a
+downloadable file: `text/csv` for CSV, `application/octet-stream` for XLSX and
+PDF. Sellers are always scoped to their own operations; admins see everything.
+
+| Path | Report | Filters |
+| --- | --- | --- |
+| `/reports/operations_export` | Monthly operations summary for accounting | `project_id`, `start_date`, `end_date` |
+| `/reports/commissions_export` | Commissions grouped by seller (paid/pending, credits, net pending) | `start_date`, `end_date` |
+| `/reports/overdue_export` | Overdue payments with 1-30/31-60/61-90/90+ aging buckets (cancelled contracts excluded) | none |
+| `/reports/income_flow_export` | Monthly income flow: actual vs projected collections per month/project | `project_id`, `start_date`, `end_date` |
+
+Dates accept `AAAA-MM-DD` or RFC3339. When both dates are omitted on the
+operations and income-flow exports, the period defaults to the current calendar
+month; commissions keeps all periods and overdue is a current snapshot.
+
+**Migración de endpoints eliminados**
+
+| Antes | Ahora |
+| --- | --- |
+| `/analytics/export?format=x` | `/reports/operations_export?format=x` |
+| `/reports/commissions_csv` | `/reports/commissions_export?format=csv` |
+| `/reports/total_revenue_csv` | `/reports/income_flow_export?format=csv` |
+| `/reports/overdue_payments_csv` | `/reports/overdue_export?format=csv` |
+
+The old endpoints were removed; `format` is now required on every replacement.
 
 ### Any authenticated user
 

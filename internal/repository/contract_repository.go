@@ -565,12 +565,25 @@ type PaymentRepository interface {
 	BatchUpdateInterest(ctx context.Context, updates map[uint]float64) error
 }
 
+// OverdueReportRepository exposes the overdue detail required by the overdue
+// payments export. It stays separate from PaymentRepository so the report-only
+// query does not force every payment fake to implement it.
+type OverdueReportRepository interface {
+	FindOverdueForActiveContractsDetailed(ctx context.Context) ([]models.Payment, error)
+}
+
 type paymentRepository struct {
 	db *gorm.DB
 }
 
 // NewPaymentRepository creates a new payment repository
 func NewPaymentRepository(db *gorm.DB) PaymentRepository {
+	return &paymentRepository{db: db}
+}
+
+// NewOverdueReportRepository creates the repository that feeds the overdue
+// payments export. It shares the payment repository implementation.
+func NewOverdueReportRepository(db *gorm.DB) OverdueReportRepository {
 	return &paymentRepository{db: db}
 }
 
@@ -753,7 +766,7 @@ func (r *paymentRepository) FindOverdue(ctx context.Context) ([]models.Payment, 
 
 // FindOverdueForActiveContracts returns overdue payments only for active contracts (approved, active=true)
 // and active users (status=active, not discarded). Excludes payments that had a reminder sent in the last 7 days
-// to avoid spamming. Preloads Contract.Lot and Contract.ApplicantUser for email templates.
+// to avoid spamming. Preloads Contract.Lot.Project, Contract.Lot and Contract.ApplicantUser for email templates.
 func (r *paymentRepository) FindOverdueForActiveContracts(ctx context.Context) ([]models.Payment, error) {
 	var payments []models.Payment
 	err := r.db.WithContext(ctx).
@@ -763,8 +776,29 @@ func (r *paymentRepository) FindOverdueForActiveContracts(ctx context.Context) (
 			models.StatusActive).
 		Where("payments.status = ? AND payments.due_date < CURRENT_DATE", models.PaymentStatusPending).
 		Where("(payments.overdue_reminder_sent_at IS NULL OR payments.overdue_reminder_sent_at < CURRENT_TIMESTAMP - INTERVAL '7 days')").
-		Preload("Contract.Lot").
+		Preload("Contract.Lot.Project").
 		Preload("Contract.ApplicantUser").
+		Order("payments.due_date ASC").
+		Find(&payments).Error
+	return payments, err
+}
+
+// FindOverdueForActiveContractsDetailed returns every overdue payment of an
+// active (approved or signed, not cancelled) contract. Unlike
+// FindOverdueForActiveContracts it does not skip payments that already
+// received a reminder, because the report must list every overdue row.
+// Contract is preloaded with its cached Balance, the applicant user and the
+// lot's project, which the overdue export needs for fiscal and grouping
+// columns. Payment.PaymentType is a column of the payment row itself.
+func (r *paymentRepository) FindOverdueForActiveContractsDetailed(ctx context.Context) ([]models.Payment, error) {
+	var payments []models.Payment
+	err := r.db.WithContext(ctx).
+		Joins("JOIN contracts ON contracts.id = payments.contract_id AND contracts.status IN ? AND contracts.active = ?",
+			[]string{models.ContractStatusApproved, models.ContractStatusSigned}, true).
+		Where("payments.status = ? AND payments.due_date < CURRENT_DATE", models.PaymentStatusPending).
+		Preload("Contract").
+		Preload("Contract.ApplicantUser").
+		Preload("Contract.Lot.Project").
 		Order("payments.due_date ASC").
 		Find(&payments).Error
 	return payments, err

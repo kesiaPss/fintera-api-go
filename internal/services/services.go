@@ -24,7 +24,7 @@ type Services struct {
 	CreditScore    *CreditScoreService
 	Email          *EmailService
 	Analytics      *AnalyticsService
-	Export         *ExportService
+	ReportExport   *ReportExportService
 	Job            *JobService
 	Branding       *BrandingService
 	Settings       *GeneralSettingsService
@@ -90,7 +90,7 @@ func NewServices(repos *repository.Repositories, worker *jobs.Worker, storage *s
 		CreditScore:    NewCreditScoreService(repos.User, repos.Contract, repos.Payment),
 		Email:          emailSvc,
 		Analytics:      analyticsSvc,
-		Export:         NewExportService(analyticsSvc), // AnalyticsSvc passed to ExportSvc
+		ReportExport:   NewReportExportService(repos.Analytics, repos.Overdue, repos.Payment, reportSvc, repos.Commission),
 		Job:            jobSvc,
 		Branding:       NewBrandingService(repos.Branding, storage, auditSvc),
 		Settings:       settingsSvc,

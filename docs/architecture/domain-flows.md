@@ -211,11 +211,48 @@ Worker characteristics (`internal/jobs/worker.go`):
 PDF binary is required. Email templates live in
 `internal/services/templates/email/*.html`.
 
-CSV reports: commissions, total revenue, overdue payments.
 PDF reports: user balance, contract promise, rescission, user information
 (reuses balance PDF), customer record.
 
-Analytics exports (`ExportService`) support CSV, XLSX, and PDF (gofpdf).
+Financial exports are built once by `ReportExportService` into a neutral
+`ReportDocument` (metadata, ordered sections, typed cells and totals) and
+rendered by three format-specific renderers, so XLSX, CSV, and PDF always show
+the same sections and totals. XLSX is the primary format (styled sheet, frozen
+headers, money/date formats, status and severity colors); CSV and PDF are also
+available. Every export is written in Spanish, including sheet names, section
+titles, column headers, statuses, and filenames such as
+`reporte_operaciones_2026-10.xlsx`. Client-level detail includes the identity,
+the RTN, and the bank reference (authorization number or payer account name)
+when the source record provides them, leaving the columns empty otherwise.
+
+The four exports live under `/reports/*_export` (admin and seller; sellers are
+scoped to their own operations):
+
+- **Operations** (`operations_export`): monthly operations/accounting summary
+  with contracts approved/closed/cancelled/rejected, sales by financing type,
+  collections by payment type, interest collected, period effectiveness
+  (collected vs projected), signed ledger movements by entry type, outstanding
+  portfolio, and lot distribution. Defaults to the current calendar month when
+  no dates are given.
+- **Commissions** (`commissions_export`): one table and summary block per
+  seller with estimated/paid/pending subtotals, paid vs pending rows visually
+  distinguished, pending credits (`seller_commission_credits`), and net pending
+  per seller, plus grand totals. With no dates it covers all periods.
+- **Overdue payments** (`overdue_export`): aging buckets 1-30, 31-60, 61-90 and
+  90+ days with count/capital/interest/total per bucket, color-coded severity
+  detail, contract balance, fiscal and contact data. Cancelled contracts are
+  excluded. It is a current snapshot and takes no filters besides `format`.
+- **Income flow** (`income_flow_export`): monthly actual vs projected
+  collections with deviation and effectiveness, collections per project,
+  accounting movements, and payment/interest/refund/adjustment breakdown,
+  including the fiscal collection detail. Defaults to the current calendar
+  month when no dates are given, so the payment detail never loads the entire
+  history.
+
+All four accept `format=xlsx|csv|pdf`; the format is required. CSV is an
+unstyled data format with the same Spanish headers and numeric money values
+without currency symbols; XLSX and PDF share the PDF design palette and table
+primitives.
 
 ## Notifications and email
 

@@ -16,6 +16,7 @@ type Handlers struct {
 	Payment        *PaymentHandler
 	Notification   *NotificationHandler
 	Report         *ReportHandler
+	ReportExport   *ReportExportHandler
 	Audit          *AuditHandler
 	Analytics      *AnalyticsHandler
 	Job            *JobHandler
@@ -44,8 +45,9 @@ func NewHandlers(svcs *services.Services, storage *storage.LocalStorage) *Handle
 		Payment:        NewPaymentHandler(svcs.Payment, storage),
 		Notification:   NewNotificationHandler(svcs.Notification),
 		Report:         NewReportHandler(svcs.Report),
+		ReportExport:   NewReportExportHandler(svcs.ReportExport),
 		Audit:          NewAuditHandler(svcs.Audit), // Pass AuditService
-		Analytics:      NewAnalyticsHandler(svcs.Analytics, svcs.Export),
+		Analytics:      NewAnalyticsHandler(svcs.Analytics),
 		Job:            NewJobHandler(svcs.Job),
 		Branding:       NewBrandingHandler(svcs.Branding),
 		Settings:       NewGeneralSettingsHandler(svcs.Settings),

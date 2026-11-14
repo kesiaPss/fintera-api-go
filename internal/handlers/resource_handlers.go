@@ -617,31 +617,6 @@ func NewReportHandler(reportService *services.ReportService) *ReportHandler {
 	return &ReportHandler{reportService: reportService}
 }
 
-// @Summary Commissions Report
-// @Description Download commissions report as CSV
-// @Tags Reports
-// @Produce text/csv
-// @Success 200 {file} file "commissions.csv"
-// @Security BearerAuth
-// @Router /reports/commissions_csv [get]
-// @Router /reports/commissions_csv [get]
-func (h *ReportHandler) CommissionsCSV(c *gin.Context) {
-	startDate := c.Query("start_date")
-	endDate := c.Query("end_date")
-	userID := middleware.GetUserID(c)
-	role := middleware.GetUserRole(c)
-	filterByCreator := role != "admin"
-
-	buf, err := h.reportService.GenerateCommissionsCSV(c.Request.Context(), startDate, endDate, userID, filterByCreator)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	c.Header("Content-Type", "text/csv")
-	c.Header("Content-Disposition", "attachment; filename=commissions.csv")
-	c.String(http.StatusOK, buf.String())
-}
-
 // @Summary Commissions List
 // @Description Get a list of commissions for a period
 // @Tags Reports
@@ -681,42 +656,6 @@ func (h *ReportHandler) Commissions(c *gin.Context) {
 		"pending_credits": pendingCredits,
 		"net_pending":     services.PendingCommissionTotal(items) - pendingCredits,
 	})
-}
-
-// @Summary Revenue Report
-// @Description Download total revenue report as CSV
-// @Tags Reports
-// @Produce text/csv
-// @Success 200 {file} file "revenue.csv"
-// @Security BearerAuth
-// @Router /reports/total_revenue_csv [get]
-func (h *ReportHandler) TotalRevenueCSV(c *gin.Context) {
-	buf, err := h.reportService.GenerateRevenueCSV(c.Request.Context())
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	c.Header("Content-Type", "text/csv")
-	c.Header("Content-Disposition", "attachment; filename=revenue.csv")
-	c.String(http.StatusOK, buf.String())
-}
-
-// @Summary Overdue Payments Report
-// @Description Download overdue payments report as CSV
-// @Tags Reports
-// @Produce text/csv
-// @Success 200 {file} file "overdue.csv"
-// @Security BearerAuth
-// @Router /reports/overdue_payments_csv [get]
-func (h *ReportHandler) OverduePaymentsCSV(c *gin.Context) {
-	buf, err := h.reportService.GenerateOverduePaymentsCSV(c.Request.Context())
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	c.Header("Content-Type", "text/csv")
-	c.Header("Content-Disposition", "attachment; filename=overdue.csv")
-	c.String(http.StatusOK, buf.String())
 }
 
 // @Summary User Balance PDF

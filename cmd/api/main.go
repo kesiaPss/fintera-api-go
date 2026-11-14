@@ -445,14 +445,14 @@ func setupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 					analytics.GET("/distribution", h.Analytics.Distribution)
 					analytics.GET("/performance", h.Analytics.Performance)
 					analytics.GET("/sellers", h.Analytics.Sellers)
-					analytics.GET("/export", h.Analytics.Export)
 				}
 
 				// Reports (seller can generate reports)
+				sellerAdmin.GET("/reports/operations_export", h.ReportExport.Operations)
+				sellerAdmin.GET("/reports/commissions_export", h.ReportExport.Commissions)
+				sellerAdmin.GET("/reports/overdue_export", h.ReportExport.Overdue)
+				sellerAdmin.GET("/reports/income_flow_export", h.ReportExport.IncomeFlow)
 				sellerAdmin.GET("/reports/commissions", h.Report.Commissions)
-				sellerAdmin.GET("/reports/commissions_csv", h.Report.CommissionsCSV)
-				sellerAdmin.GET("/reports/total_revenue_csv", h.Report.TotalRevenueCSV)
-				sellerAdmin.GET("/reports/overdue_payments_csv", h.Report.OverduePaymentsCSV)
 				sellerAdmin.GET("/reports/user_balance_pdf", h.Report.UserBalancePDF)
 				sellerAdmin.GET("/reports/user_promise_contract_pdf", h.Report.UserPromiseContractPDF)
 				sellerAdmin.GET("/reports/user_rescission_contract_pdf", h.Report.UserRescissionContractPDF)
