@@ -131,11 +131,61 @@ func (h *CommissionHandler) DeleteException(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Excepción eliminada"})
 }
 
+// ListCredits returns the seller commission credits. Sellers only see their
+// own credits; admins see every credit.
+// @Summary List commission credits
+// @Description Commission credits created by cancelled contracts with a paid commission. Sellers only see their own credits.
+// @Tags Commissions
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Security BearerAuth
+// @Router /commissions/credits [get]
+func (h *CommissionHandler) ListCredits(c *gin.Context) {
+	sellerID := uint(0)
+	if middleware.GetUserRole(c) != "admin" {
+		sellerID = middleware.GetUserID(c)
+	}
+	credits, err := h.commissions.ListCredits(c.Request.Context(), sellerID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"credits": credits})
+}
+
+// ApplyCredit settles a pending commission credit.
+// @Summary Apply commission credit
+// @Description Mark a pending commission credit as settled and record the acting admin. Admin only.
+// @Tags Commissions
+// @Produce json
+// @Param id path int true "Credit ID"
+// @Success 200 {object} map[string]interface{}
+// @Failure 404 {object} map[string]string
+// @Failure 409 {object} map[string]string
+// @Security BearerAuth
+// @Router /commissions/credits/{id}/apply [post]
+func (h *CommissionHandler) ApplyCredit(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil || id == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ID de crédito inválido"})
+		return
+	}
+	credit, err := h.commissions.ApplyCredit(c.Request.Context(), middleware.GetUserID(c), uint(id))
+	if err != nil {
+		writeCommissionError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"credit": credit, "message": "Crédito aplicado"})
+}
+
 func writeCommissionError(c *gin.Context, err error) {
 	status := http.StatusInternalServerError
 	switch {
-	case errors.Is(err, services.ErrCommissionExceptionMissing):
+	case errors.Is(err, services.ErrCommissionExceptionMissing),
+		errors.Is(err, services.ErrCommissionCreditMissing):
 		status = http.StatusNotFound
+	case errors.Is(err, services.ErrCommissionCreditSettled):
+		status = http.StatusConflict
 	case errors.Is(err, services.ErrInvalidCommissionRate),
 		errors.Is(err, services.ErrInvalidCommissionRules),
 		errors.Is(err, services.ErrAssignmentSellerInactive):

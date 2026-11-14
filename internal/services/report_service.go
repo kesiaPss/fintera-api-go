@@ -41,6 +41,7 @@ type ReportService struct {
 	userRepo        repository.UserRepository
 	instructionRepo repository.ProjectPaymentInstructionRepository
 	historicalRepo  repository.HistoricalSaleRepository
+	commissionRepo  repository.CommissionRepository
 	scoreSvc        *ScoreService
 }
 
@@ -62,6 +63,12 @@ func NewReportService(
 // report. It is optional so the PDF-only tests can build a service without it.
 func (s *ReportService) SetHistoricalSaleRepository(repo repository.HistoricalSaleRepository) {
 	s.historicalRepo = repo
+}
+
+// SetCommissionRepository adds the seller commission credits to the commission
+// report. It is optional so focused tests can build a service without it.
+func (s *ReportService) SetCommissionRepository(repo repository.CommissionRepository) {
+	s.commissionRepo = repo
 }
 
 // SetScoreService adds the seller score/level and breakdown to the commission
@@ -235,6 +242,40 @@ func (s *ReportService) GenerateCommissions(ctx context.Context, startDate, endD
 
 	s.enrichCommissionScores(ctx, items)
 	return items, nil
+}
+
+// CommissionCredits returns the seller commission credits created by cancelled
+// contracts. sellerID > 0 limits the list to one seller. The second return
+// value is the still-pending total so the report can expose the net payable.
+func (s *ReportService) CommissionCredits(ctx context.Context, sellerID uint) ([]models.SellerCommissionCreditResponse, float64, error) {
+	if s.commissionRepo == nil {
+		return []models.SellerCommissionCreditResponse{}, 0, nil
+	}
+	credits, err := s.commissionRepo.ListCredits(ctx, sellerID)
+	if err != nil {
+		return nil, 0, err
+	}
+	responses := make([]models.SellerCommissionCreditResponse, 0, len(credits))
+	pending := 0.0
+	for i := range credits {
+		response := credits[i].ToResponse()
+		responses = append(responses, response)
+		if response.Status != models.CommissionCreditStatusSettled {
+			pending += response.Amount
+		}
+	}
+	return responses, pending, nil
+}
+
+// PendingCommissionTotal sums the commission rows that have not been paid out.
+func PendingCommissionTotal(items []CommissionReportItem) float64 {
+	total := 0.0
+	for _, item := range items {
+		if item.CommissionPaidAt == nil {
+			total += item.Commission
+		}
+	}
+	return total
 }
 
 func (s *ReportService) enrichCommissionScores(ctx context.Context, items []CommissionReportItem) {

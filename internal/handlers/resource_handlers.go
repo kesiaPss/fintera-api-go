@@ -665,7 +665,22 @@ func (h *ReportHandler) Commissions(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"commissions": items})
+	sellerID := uint(0)
+	if filterByCreator {
+		sellerID = userID
+	}
+	credits, pendingCredits, err := h.reportService.CommissionCredits(c.Request.Context(), sellerID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"commissions":     items,
+		"credits":         credits,
+		"pending_credits": pendingCredits,
+		"net_pending":     services.PendingCommissionTotal(items) - pendingCredits,
+	})
 }
 
 // @Summary Revenue Report

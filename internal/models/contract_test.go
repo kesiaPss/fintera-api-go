@@ -281,3 +281,22 @@ func TestContractResponseSellerContact(t *testing.T) {
 		t.Fatalf("internal fields leaked: %+v", redacted)
 	}
 }
+
+func TestContractMayCancel(t *testing.T) {
+	allowed := map[string]bool{
+		ContractStatusPending:   true,
+		ContractStatusSubmitted: true,
+		ContractStatusRejected:  true,
+		ContractStatusApproved:  true,
+		ContractStatusSigned:    true,
+		ContractStatusCancelled: false,
+		ContractStatusClosed:    false,
+	}
+
+	for status, want := range allowed {
+		contract := &Contract{Status: status}
+		if got := contract.MayCancel(); got != want {
+			t.Errorf("MayCancel(%q) = %v, want %v", status, got, want)
+		}
+	}
+}

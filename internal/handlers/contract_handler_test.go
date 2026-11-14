@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -106,11 +107,18 @@ func (s *contractRepoStub) HasActiveContracts(context.Context, uint) (bool, erro
 	return false, s.err
 }
 
+type paymentStatusUpdate struct {
+	contractID   uint
+	fromStatuses []string
+	toStatus     string
+}
+
 type paymentRepoStub struct {
 	byContract        []models.Payment
 	created           []*models.Payment
 	deleted           []uint
 	deletedByContract []uint
+	updatedStatuses   []paymentStatusUpdate
 	err               error
 }
 
@@ -139,6 +147,15 @@ func (s *paymentRepoStub) Delete(_ context.Context, id uint) error {
 
 func (s *paymentRepoStub) DeleteByContract(_ context.Context, contractID uint) error {
 	s.deletedByContract = append(s.deletedByContract, contractID)
+	return s.err
+}
+
+func (s *paymentRepoStub) UpdateStatusByContract(_ context.Context, contractID uint, fromStatuses []string, toStatus string) error {
+	s.updatedStatuses = append(s.updatedStatuses, paymentStatusUpdate{
+		contractID:   contractID,
+		fromStatuses: fromStatuses,
+		toStatus:     toStatus,
+	})
 	return s.err
 }
 
@@ -607,7 +624,7 @@ func TestContractHandler_StateActions(t *testing.T) {
 	})
 
 	t.Run("cancel", func(t *testing.T) {
-		handler, contractRepo, _, _, _, mockSQL := newContractHandlerForTest(t)
+		handler, contractRepo, paymentRepo, _, _, mockSQL := newContractHandlerForTest(t)
 		contractRepo.byID = &models.Contract{ID: 7, LotID: 1, Status: models.ContractStatusSubmitted, ApplicantUserID: 5}
 		audit(mockSQL)
 
@@ -617,6 +634,13 @@ func TestContractHandler_StateActions(t *testing.T) {
 		assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
 		payload := decodeContractResponse(t, w)
 		assert.Equal(t, models.ContractStatusCancelled, payload.Contract.Status)
+		assert.Len(t, paymentRepo.updatedStatuses, 1)
+		assert.Equal(t, models.PaymentStatusCancelled, paymentRepo.updatedStatuses[0].toStatus)
+	})
+
+	t.Run("reopen is not exposed", func(t *testing.T) {
+		_, ok := reflect.TypeOf(&ContractHandler{}).MethodByName("Reopen")
+		assert.False(t, ok, "the reopen action must not exist")
 	})
 
 	t.Run("delete rejected", func(t *testing.T) {

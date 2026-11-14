@@ -115,6 +115,9 @@ func (m *mockPaymentRepositoryWithOverdue) Delete(ctx context.Context, id uint) 
 func (m *mockPaymentRepositoryWithOverdue) DeleteByContract(ctx context.Context, contractID uint) error {
 	return nil
 }
+func (m *mockPaymentRepositoryWithOverdue) UpdateStatusByContract(ctx context.Context, contractID uint, fromStatuses []string, toStatus string) error {
+	return nil
+}
 func (m *mockPaymentRepositoryWithOverdue) List(ctx context.Context, query *repository.ListQuery) ([]models.Payment, int64, error) {
 	return nil, 0, nil
 }

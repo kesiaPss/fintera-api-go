@@ -70,6 +70,7 @@ func NewServices(repos *repository.Repositories, worker *jobs.Worker, storage *s
 
 	reportSvc := NewReportService(repos.Payment, repos.Contract, repos.User, repos.Instructions)
 	reportSvc.SetHistoricalSaleRepository(repos.HistoricalSale)
+	reportSvc.SetCommissionRepository(repos.Commission)
 	reportSvc.SetScoreService(scoreSvc)
 
 	settingsSvc := NewGeneralSettingsService(repos.Settings, auditSvc)
