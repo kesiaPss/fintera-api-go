@@ -18,13 +18,14 @@ stateDiagram-v2
     pending --> cancelled: cancel
     submitted --> cancelled: cancel
     rejected --> cancelled: cancel
+    approved --> cancelled: cancel
+    signed --> cancelled: cancel
     approved --> closed: close
-    closed --> approved: reopen
 ```
 
 FSM source: `internal/statemachine/contract_fsm.go`.
 Model guards: `Contract.MaySubmit`, `MayApprove`, `MayReject`, `MayCancel`,
-`MayClose`, `MayReopen`.
+`MayClose`.
 
 ### Approve (`ContractService.Approve`)
 
@@ -47,11 +48,16 @@ Model guards: `Contract.MaySubmit`, `MayApprove`, `MayReject`, `MayCancel`,
 
 ### Cancel (`ContractService.Cancel`)
 
-- FSM `cancel`, store note, set `active = false`.
-- Delete `pending`/`submitted` payments for the contract.
-- Delete all ledger entries for the contract.
-- Release the lot to `available`.
-- Audit log.
+- FSM `cancel` (allowed from `pending`, `submitted`, `rejected`, `approved`,
+  `signed`), store note, set `active = false`.
+- Mark `pending`/`submitted` payments `cancelled` (rows preserved and excluded
+  from collection jobs); keep `paid` payments.
+- Preserve the ledger: add a `refund` entry for the paid amount and an
+  `adjustment` write-off so the balance settles to zero.
+- Release the lot to `available` only when no other active contract uses it.
+- If the commission was already paid, create a `seller_commission_credits` row
+  for the seller (`pending`, applied manually by an admin).
+- Audit log with the acting admin.
 
 ### Close (`ContractService.Close`)
 
@@ -63,10 +69,6 @@ Model guards: `Contract.MaySubmit`, `MayApprove`, `MayReject`, `MayCancel`,
 
 Contracts are also auto-closed by `PaymentService.updateContractBalance` when
 the balance reaches `>= 0` and status is `approved`.
-
-### Reopen
-
-FSM `closed → approved`. Used to correct prematurely closed contracts.
 
 ### Capital repayment (`ContractService.CapitalRepayment`)
 

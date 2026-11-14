@@ -125,11 +125,18 @@ Key columns: `contract_id`, `payment_id`, `amount`, `description`,
 | `payment` | positive | Approved payment reduces debt |
 | `interest` | negative | Overdue interest increases debt |
 | `prepayment` | positive | Capital repayment reduces debt |
+| `refund` | negative | Refund on cancellation (reverses a payment) |
 | `adjustment` | either | Reversal or manual correction |
 
 > The comment in `internal/models/contract_ledger_entry.go` says the opposite
 > sign convention. Trust the implementation: negative increases debt,
 > positive reduces it.
+
+### `seller_commission_credits`
+
+Recoverable commission credit created when a contract whose commission was
+already paid is cancelled. Key columns: `seller_id`, `contract_id`, `amount`,
+`status` (`pending`/`settled`), `created_at`, `settled_at`, `settled_by`.
 
 ### `notifications`
 
@@ -180,9 +187,9 @@ Read publicly via `GET /api/v1/settings`; updated only by admins via
 | `contracts.financing_type` | `direct`, `bank`, `cash` |
 | `contracts.bank_credit_status` | `not_started`, `pre_qualified`, `pre_approved`, `approved` |
 | `project_payment_instructions.account_type` | `savings`, `checking` |
-| `payments.status` | `pending`, `submitted`, `paid`, `rejected`, `readjustment` |
+| `payments.status` | `pending`, `submitted`, `paid`, `rejected`, `readjustment`, `cancelled` |
 | `payments.payment_type` | `reservation`, `down_payment`, `installment`, `full`, `advance`, `capital_repayment` |
-| ledger `entry_type` | `initial`, `payment`, `interest`, `prepayment`, `adjustment` |
+| ledger `entry_type` | `initial`, `payment`, `interest`, `prepayment`, `refund`, `adjustment` |
 
 `contracts.status` includes `signed` in the model constants, but no transition
 currently produces it.
