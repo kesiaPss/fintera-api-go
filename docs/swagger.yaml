@@ -1364,35 +1364,6 @@ paths:
       summary: Get Lot Distribution
       tags:
       - Analytics
-  /analytics/export:
-    get:
-      description: Generates and downloads analytics reports in various formats
-      parameters:
-      - description: Report format (csv, xlsx, pdf)
-        in: query
-        name: format
-        required: true
-        type: string
-      - description: Project ID
-        in: query
-        name: project_id
-        type: integer
-      - description: Start Date (ISO 8601)
-        in: query
-        name: start_date
-        type: string
-      - description: End Date (ISO 8601)
-        in: query
-        name: end_date
-        type: string
-      produces:
-      - application/octet-stream
-      responses: {}
-      security:
-      - BearerAuth: []
-      summary: Export Analytics Data
-      tags:
-      - Analytics
   /analytics/overview:
     get:
       description: Returns high-level statistics and trend data
@@ -4645,19 +4616,49 @@ paths:
       summary: Commissions List
       tags:
       - Reports
-  /reports/commissions_csv:
+  /reports/commissions_export:
     get:
-      description: Download commissions report as CSV
+      description: Genera el reporte de comisiones agrupado por vendedor en XLSX,
+        CSV o PDF, con comisiones pagadas, pendientes, créditos y neto pendiente.
+      parameters:
+      - description: Formato de exportación (xlsx, csv, pdf)
+        in: query
+        name: format
+        required: true
+        type: string
+      - description: Fecha inicial (AAAA-MM-DD o RFC3339). Sin valor, incluye todos
+          los períodos
+        in: query
+        name: start_date
+        type: string
+      - description: Fecha final (AAAA-MM-DD o RFC3339). Sin valor, incluye todos
+          los períodos
+        in: query
+        name: end_date
+        type: string
       produces:
+      - application/octet-stream
       - text/csv
       responses:
         "200":
-          description: commissions.csv
+          description: reporte_comisiones_<período>.<formato>
           schema:
             type: file
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
       security:
       - BearerAuth: []
-      summary: Commissions Report
+      summary: Exportar Reporte de Comisiones
       tags:
       - Reports
   /reports/customer_record_pdf:
@@ -4681,34 +4682,140 @@ paths:
       summary: Customer Record PDF
       tags:
       - Reports
-  /reports/overdue_payments_csv:
+  /reports/income_flow_export:
     get:
-      description: Download overdue payments report as CSV
+      description: Genera el flujo de ingresos mensual (cobranza real contra proyectada)
+        en XLSX, CSV o PDF. Si se omiten start_date y end_date, el período por defecto
+        es el mes calendario actual.
+      parameters:
+      - description: Formato de exportación (xlsx, csv, pdf)
+        in: query
+        name: format
+        required: true
+        type: string
+      - description: ID del proyecto
+        in: query
+        name: project_id
+        type: integer
+      - description: Fecha inicial (AAAA-MM-DD o RFC3339). Por defecto, el primer
+          día del mes actual
+        in: query
+        name: start_date
+        type: string
+      - description: Fecha final (AAAA-MM-DD o RFC3339). Por defecto, el último día
+          del mes actual
+        in: query
+        name: end_date
+        type: string
       produces:
+      - application/octet-stream
       - text/csv
       responses:
         "200":
-          description: overdue.csv
+          description: reporte_flujo_ingresos_<período>.<formato>
           schema:
             type: file
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
       security:
       - BearerAuth: []
-      summary: Overdue Payments Report
+      summary: Exportar Reporte de Flujo de Ingresos
       tags:
       - Reports
-  /reports/total_revenue_csv:
+  /reports/operations_export:
     get:
-      description: Download total revenue report as CSV
+      description: Genera el resumen mensual de operaciones (contabilidad) en XLSX,
+        CSV o PDF. Si se omiten start_date y end_date, el período por defecto es el
+        mes calendario actual.
+      parameters:
+      - description: Formato de exportación (xlsx, csv, pdf)
+        in: query
+        name: format
+        required: true
+        type: string
+      - description: ID del proyecto
+        in: query
+        name: project_id
+        type: integer
+      - description: Fecha inicial (AAAA-MM-DD o RFC3339). Por defecto, el primer
+          día del mes actual
+        in: query
+        name: start_date
+        type: string
+      - description: Fecha final (AAAA-MM-DD o RFC3339). Por defecto, el último día
+          del mes actual
+        in: query
+        name: end_date
+        type: string
       produces:
+      - application/octet-stream
       - text/csv
       responses:
         "200":
-          description: revenue.csv
+          description: reporte_operaciones_<período>.<formato>
           schema:
             type: file
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
       security:
       - BearerAuth: []
-      summary: Revenue Report
+      summary: Exportar Reporte de Operaciones
+      tags:
+      - Reports
+  /reports/overdue_export:
+    get:
+      description: Genera el reporte de pagos vencidos de contratos activos en XLSX,
+        CSV o PDF, con tramos de mora de 1-30, 31-60, 61-90 y 90+ días. No incluye
+        contratos cancelados.
+      parameters:
+      - description: Formato de exportación (xlsx, csv, pdf)
+        in: query
+        name: format
+        required: true
+        type: string
+      produces:
+      - application/octet-stream
+      - text/csv
+      responses:
+        "200":
+          description: reporte_pagos_vencidos_<período>.<formato>
+          schema:
+            type: file
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Exportar Reporte de Pagos Vencidos
       tags:
       - Reports
   /reports/user_balance_pdf:

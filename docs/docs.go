@@ -50,51 +50,6 @@ const docTemplate = `{
                 "responses": {}
             }
         },
-        "/analytics/export": {
-            "get": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "Generates and downloads analytics reports in various formats",
-                "produces": [
-                    "application/octet-stream"
-                ],
-                "tags": [
-                    "Analytics"
-                ],
-                "summary": "Export Analytics Data",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Report format (csv, xlsx, pdf)",
-                        "name": "format",
-                        "in": "query",
-                        "required": true
-                    },
-                    {
-                        "type": "integer",
-                        "description": "Project ID",
-                        "name": "project_id",
-                        "in": "query"
-                    },
-                    {
-                        "type": "string",
-                        "description": "Start Date (ISO 8601)",
-                        "name": "start_date",
-                        "in": "query"
-                    },
-                    {
-                        "type": "string",
-                        "description": "End Date (ISO 8601)",
-                        "name": "end_date",
-                        "in": "query"
-                    }
-                ],
-                "responses": {}
-            }
-        },
         "/analytics/overview": {
             "get": {
                 "security": [
@@ -5111,26 +5066,66 @@ const docTemplate = `{
                 }
             }
         },
-        "/reports/commissions_csv": {
+        "/reports/commissions_export": {
             "get": {
                 "security": [
                     {
                         "BearerAuth": []
                     }
                 ],
-                "description": "Download commissions report as CSV",
+                "description": "Genera el reporte de comisiones agrupado por vendedor en XLSX, CSV o PDF, con comisiones pagadas, pendientes, créditos y neto pendiente.",
                 "produces": [
+                    "application/octet-stream",
                     "text/csv"
                 ],
                 "tags": [
                     "Reports"
                 ],
-                "summary": "Commissions Report",
+                "summary": "Exportar Reporte de Comisiones",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Formato de exportación (xlsx, csv, pdf)",
+                        "name": "format",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Fecha inicial (AAAA-MM-DD o RFC3339). Sin valor, incluye todos los períodos",
+                        "name": "start_date",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Fecha final (AAAA-MM-DD o RFC3339). Sin valor, incluye todos los períodos",
+                        "name": "end_date",
+                        "in": "query"
+                    }
+                ],
                 "responses": {
                     "200": {
-                        "description": "commissions.csv",
+                        "description": "reporte_comisiones_\u003cperíodo\u003e.\u003cformato\u003e",
                         "schema": {
                             "type": "file"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     }
                 }
@@ -5170,51 +5165,196 @@ const docTemplate = `{
                 }
             }
         },
-        "/reports/overdue_payments_csv": {
+        "/reports/income_flow_export": {
             "get": {
                 "security": [
                     {
                         "BearerAuth": []
                     }
                 ],
-                "description": "Download overdue payments report as CSV",
+                "description": "Genera el flujo de ingresos mensual (cobranza real contra proyectada) en XLSX, CSV o PDF. Si se omiten start_date y end_date, el período por defecto es el mes calendario actual.",
                 "produces": [
+                    "application/octet-stream",
                     "text/csv"
                 ],
                 "tags": [
                     "Reports"
                 ],
-                "summary": "Overdue Payments Report",
+                "summary": "Exportar Reporte de Flujo de Ingresos",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Formato de exportación (xlsx, csv, pdf)",
+                        "name": "format",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "ID del proyecto",
+                        "name": "project_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Fecha inicial (AAAA-MM-DD o RFC3339). Por defecto, el primer día del mes actual",
+                        "name": "start_date",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Fecha final (AAAA-MM-DD o RFC3339). Por defecto, el último día del mes actual",
+                        "name": "end_date",
+                        "in": "query"
+                    }
+                ],
                 "responses": {
                     "200": {
-                        "description": "overdue.csv",
+                        "description": "reporte_flujo_ingresos_\u003cperíodo\u003e.\u003cformato\u003e",
                         "schema": {
                             "type": "file"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     }
                 }
             }
         },
-        "/reports/total_revenue_csv": {
+        "/reports/operations_export": {
             "get": {
                 "security": [
                     {
                         "BearerAuth": []
                     }
                 ],
-                "description": "Download total revenue report as CSV",
+                "description": "Genera el resumen mensual de operaciones (contabilidad) en XLSX, CSV o PDF. Si se omiten start_date y end_date, el período por defecto es el mes calendario actual.",
                 "produces": [
+                    "application/octet-stream",
                     "text/csv"
                 ],
                 "tags": [
                     "Reports"
                 ],
-                "summary": "Revenue Report",
+                "summary": "Exportar Reporte de Operaciones",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Formato de exportación (xlsx, csv, pdf)",
+                        "name": "format",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "ID del proyecto",
+                        "name": "project_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Fecha inicial (AAAA-MM-DD o RFC3339). Por defecto, el primer día del mes actual",
+                        "name": "start_date",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Fecha final (AAAA-MM-DD o RFC3339). Por defecto, el último día del mes actual",
+                        "name": "end_date",
+                        "in": "query"
+                    }
+                ],
                 "responses": {
                     "200": {
-                        "description": "revenue.csv",
+                        "description": "reporte_operaciones_\u003cperíodo\u003e.\u003cformato\u003e",
                         "schema": {
                             "type": "file"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/reports/overdue_export": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Genera el reporte de pagos vencidos de contratos activos en XLSX, CSV o PDF, con tramos de mora de 1-30, 31-60, 61-90 y 90+ días. No incluye contratos cancelados.",
+                "produces": [
+                    "application/octet-stream",
+                    "text/csv"
+                ],
+                "tags": [
+                    "Reports"
+                ],
+                "summary": "Exportar Reporte de Pagos Vencidos",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Formato de exportación (xlsx, csv, pdf)",
+                        "name": "format",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "reporte_pagos_vencidos_\u003cperíodo\u003e.\u003cformato\u003e",
+                        "schema": {
+                            "type": "file"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     }
                 }

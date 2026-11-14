@@ -26,6 +26,8 @@ type Repositories struct {
 	Seller         SellerRepository
 	Commission     CommissionRepository
 	HistoricalSale HistoricalSaleRepository
+	// Overdue serves the overdue payments export with the report-only query.
+	Overdue OverdueReportRepository
 }
 
 // NewRepositories creates all repository instances
@@ -51,5 +53,6 @@ func NewRepositories(db *gorm.DB) *Repositories {
 		Seller:         NewSellerRepository(db),
 		Commission:     NewCommissionRepository(db),
 		HistoricalSale: NewHistoricalSaleRepository(db),
+		Overdue:        NewOverdueReportRepository(db),
 	}
 }

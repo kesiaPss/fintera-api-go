@@ -24,6 +24,11 @@ type CommissionRepository interface {
 	CreateCredit(ctx context.Context, credit *models.SellerCommissionCredit) error
 	FindCreditByID(ctx context.Context, id uint) (*models.SellerCommissionCredit, error)
 	ListCredits(ctx context.Context, sellerID uint) ([]models.SellerCommissionCredit, error)
+	// ListPendingCreditsBySeller returns the pending credit amount per seller,
+	// keyed by seller ID. Sellers without pending credits are absent from the
+	// map. It feeds the commissions report, which subtracts pending credits
+	// from the pending commission of each seller.
+	ListPendingCreditsBySeller(ctx context.Context) (map[uint]float64, error)
 	SettleCredit(ctx context.Context, id, actorID uint, settledAt time.Time) (bool, error)
 }
 
@@ -152,6 +157,31 @@ func (r *commissionRepository) ListCredits(ctx context.Context, sellerID uint) (
 	}
 	err := query.Find(&credits).Error
 	return credits, err
+}
+
+// ListPendingCreditsBySeller aggregates the credits that are still pending. It
+// is a single grouped query so the commissions report does not need one lookup
+// per seller.
+func (r *commissionRepository) ListPendingCreditsBySeller(ctx context.Context) (map[uint]float64, error) {
+	var rows []struct {
+		SellerID uint
+		Total    float64
+	}
+	err := r.db.WithContext(ctx).
+		Model(&models.SellerCommissionCredit{}).
+		Select("seller_id AS seller_id, COALESCE(SUM(amount), 0) AS total").
+		Where("status = ?", models.CommissionCreditStatusPending).
+		Group("seller_id").
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+
+	credits := make(map[uint]float64, len(rows))
+	for _, row := range rows {
+		credits[row.SellerID] = row.Total
+	}
+	return credits, nil
 }
 
 // SettleCredit marks a pending credit as settled. The conditional update keeps
