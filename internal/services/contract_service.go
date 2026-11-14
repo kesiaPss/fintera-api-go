@@ -13,6 +13,7 @@ import (
 	"github.com/sjperalta/fintera-api/internal/models"
 	"github.com/sjperalta/fintera-api/internal/repository"
 	"github.com/sjperalta/fintera-api/internal/statemachine"
+	"gorm.io/gorm"
 )
 
 type ContractService struct {
@@ -658,7 +659,15 @@ func (s *ContractService) DeleteRejected(ctx context.Context, id uint) error {
 	return nil
 }
 
-func (s *ContractService) Cancel(ctx context.Context, id uint, note string) (*models.Contract, error) {
+// SystemActorID identifies cancellations triggered by background jobs rather
+// than a signed-in admin.
+const SystemActorID uint = 0
+
+// Cancel cancels a contract, preserves its financial history and settles the
+// ledger to zero. Pending/submitted payments are marked cancelled so collection
+// jobs stop picking them up; paid payments stay untouched and are refunded in
+// the ledger.
+func (s *ContractService) Cancel(ctx context.Context, id uint, note string, actorID uint) (*models.Contract, error) {
 	contract, err := s.repo.FindByIDWithDetails(ctx, id)
 	if err != nil {
 		return nil, err
@@ -672,31 +681,101 @@ func (s *ContractService) Cancel(ctx context.Context, id uint, note string) (*mo
 
 	contract.Note = &note
 	contract.Active = false
-
+	// The cancellation settles the ledger, so the cached balance is zero.
+	zero := 0.0
+	contract.Balance = &zero
 	if err := s.repo.Update(ctx, contract); err != nil {
 		return nil, err
 	}
 
-	// Delete pending/submitted payments
-	for _, payment := range contract.Payments {
+	// Keep the schedule rows for the history, but move the unpaid ones to
+	// cancelled. Paid payments must survive so the refund can be calculated.
+	if err := s.paymentRepo.UpdateStatusByContract(ctx, contract.ID,
+		[]string{models.PaymentStatusPending, models.PaymentStatusSubmitted},
+		models.PaymentStatusCancelled); err != nil {
+		return nil, fmt.Errorf("failed to cancel pending payments: %w", err)
+	}
+	// Mirror the batch update in the loaded contract so the response already
+	// reflects the cancelled schedule.
+	for i := range contract.Payments {
+		payment := &contract.Payments[i]
 		if payment.Status == models.PaymentStatusPending || payment.Status == models.PaymentStatusSubmitted {
-			logIgnoredError("delete cancelled contract payment", s.paymentRepo.Delete(ctx, payment.ID))
+			payment.Status = models.PaymentStatusCancelled
 		}
 	}
 
-	// Delete ledger entries
-	logIgnoredError("delete cancelled contract ledger entries", s.ledgerRepo.DeleteByContractID(ctx, contract.ID))
-
-	// Release lot
-	lot, _ := s.lotRepo.FindByID(ctx, contract.LotID)
-	if lot != nil {
-		lot.Status = models.LotStatusAvailable
-		logIgnoredError("release lot on cancellation", s.lotRepo.Update(ctx, lot))
+	paidTotal := 0.0
+	for i := range contract.Payments {
+		payment := &contract.Payments[i]
+		if payment.Status == models.PaymentStatusPaid && payment.PaidAmount != nil {
+			paidTotal += *payment.PaidAmount
+		}
 	}
 
-	// Audit log
-	logIgnoredError("write contract cancel audit log", s.auditSvc.Log(ctx, contract.ApplicantUserID, "CANCEL", "Contract", contract.ID,
-		fmt.Sprintf("Contrato cancelado. Nota: %s", note), "", ""))
+	now := time.Now()
+	if paidTotal > 0 {
+		refund := &models.ContractLedgerEntry{
+			ContractID:  contract.ID,
+			Amount:      -paidTotal,
+			Description: fmt.Sprintf("Reembolso por cancelación: L%.2f", paidTotal),
+			EntryType:   models.EntryTypeRefund,
+			EntryDate:   now,
+		}
+		if err := s.ledgerRepo.Create(ctx, refund); err != nil {
+			return nil, fmt.Errorf("failed to create refund ledger entry: %w", err)
+		}
+	}
+
+	// Write off the contract amount so the balance ends at zero: the initial
+	// entry is -amount and the refund reversed every payment credit.
+	if contract.Amount != nil && *contract.Amount > 0 {
+		writeOff := &models.ContractLedgerEntry{
+			ContractID:  contract.ID,
+			Amount:      *contract.Amount,
+			Description: fmt.Sprintf("Castigo por cancelación: L%.2f", *contract.Amount),
+			EntryType:   models.EntryTypeAdjustment,
+			EntryDate:   now,
+		}
+		if err := s.ledgerRepo.Create(ctx, writeOff); err != nil {
+			return nil, fmt.Errorf("failed to create write-off ledger entry: %w", err)
+		}
+	}
+
+	// Release the lot only when no other active contract is using it.
+	other, err := s.repo.FindActiveByLot(ctx, contract.LotID)
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		logIgnoredError("find active contract on cancellation", err)
+	} else if other == nil || other.ID == contract.ID {
+		lot, _ := s.lotRepo.FindByID(ctx, contract.LotID)
+		if lot != nil {
+			lot.Status = models.LotStatusAvailable
+			logIgnoredError("release lot on cancellation", s.lotRepo.Update(ctx, lot))
+		}
+	}
+
+	// Commission credit: a commission already paid to the seller becomes a
+	// recoverable pending credit. The hook is optional so focused tests can
+	// build the service without a commission dependency.
+	var commissionCredit *models.SellerCommissionCredit
+	if s.commissionSvc != nil && contract.CommissionPaidAt != nil {
+		commissionCredit, err = s.commissionSvc.CreateCancellationCredit(ctx, contract)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create commission credit: %w", err)
+		}
+	}
+
+	// Background jobs have no human actor; attribute their audit entry to the
+	// contract owner so the audit_logs foreign key stays valid.
+	auditActorID := actorID
+	if auditActorID == SystemActorID {
+		auditActorID = contract.ApplicantUserID
+	}
+	creditNote := ""
+	if commissionCredit != nil {
+		creditNote = fmt.Sprintf(". Crédito de comisión: L%.2f", commissionCredit.Amount)
+	}
+	logIgnoredError("write contract cancel audit log", s.auditSvc.Log(ctx, auditActorID, "CANCEL", "Contract", contract.ID,
+		fmt.Sprintf("Contrato cancelado. Nota: %s. Reembolso: L%.2f%s", note, paidTotal, creditNote), "", ""))
 
 	return contract, nil
 }
@@ -1005,7 +1084,7 @@ func (s *ContractService) ReleaseUnpaidReservations(ctx context.Context) error {
 	}
 
 	for _, contract := range contracts {
-		_, cancelErr := s.Cancel(ctx, contract.ID, "Reservación no pagada a tiempo")
+		_, cancelErr := s.Cancel(ctx, contract.ID, "Reservación no pagada a tiempo", SystemActorID)
 		logIgnoredError("cancel unpaid reservation", cancelErr)
 	}
 

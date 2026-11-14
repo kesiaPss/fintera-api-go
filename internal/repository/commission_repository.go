@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/sjperalta/fintera-api/internal/models"
 	"gorm.io/gorm"
@@ -10,7 +11,8 @@ import (
 )
 
 // CommissionRepository owns the global commission settings (stored on the
-// general_settings singleton) and the per-seller rate exceptions.
+// general_settings singleton), the per-seller rate exceptions and the seller
+// commission credits created when a paid commission is reversed.
 type CommissionRepository interface {
 	GetSettings(ctx context.Context) (*models.CommissionSettings, error)
 	UpdateSettings(ctx context.Context, settings *models.CommissionSettings) error
@@ -19,6 +21,10 @@ type CommissionRepository interface {
 	ListSellerRates(ctx context.Context) ([]models.SellerCommissionRate, error)
 	UpsertSellerRate(ctx context.Context, rate *models.SellerCommissionRate) error
 	DeleteSellerRate(ctx context.Context, id uint) error
+	CreateCredit(ctx context.Context, credit *models.SellerCommissionCredit) error
+	FindCreditByID(ctx context.Context, id uint) (*models.SellerCommissionCredit, error)
+	ListCredits(ctx context.Context, sellerID uint) ([]models.SellerCommissionCredit, error)
+	SettleCredit(ctx context.Context, id, actorID uint, settledAt time.Time) (bool, error)
 }
 
 type commissionRepository struct {
@@ -113,4 +119,54 @@ func (r *commissionRepository) DeleteSellerRate(ctx context.Context, id uint) er
 		return gorm.ErrRecordNotFound
 	}
 	return nil
+}
+
+func (r *commissionRepository) CreateCredit(ctx context.Context, credit *models.SellerCommissionCredit) error {
+	if credit.Status == "" {
+		credit.Status = models.CommissionCreditStatusPending
+	}
+	return r.db.WithContext(ctx).Create(credit).Error
+}
+
+func (r *commissionRepository) FindCreditByID(ctx context.Context, id uint) (*models.SellerCommissionCredit, error) {
+	var credit models.SellerCommissionCredit
+	if err := r.db.WithContext(ctx).
+		Preload("Seller").
+		Preload("Contract").
+		First(&credit, id).Error; err != nil {
+		return nil, err
+	}
+	return &credit, nil
+}
+
+// ListCredits returns every credit, or only one seller's credits when sellerID
+// is greater than zero.
+func (r *commissionRepository) ListCredits(ctx context.Context, sellerID uint) ([]models.SellerCommissionCredit, error) {
+	var credits []models.SellerCommissionCredit
+	query := r.db.WithContext(ctx).
+		Preload("Seller").
+		Preload("Contract").
+		Order("created_at DESC, id DESC")
+	if sellerID > 0 {
+		query = query.Where("seller_id = ?", sellerID)
+	}
+	err := query.Find(&credits).Error
+	return credits, err
+}
+
+// SettleCredit marks a pending credit as settled. The conditional update keeps
+// repeated applies idempotent: the second call reports no affected rows.
+func (r *commissionRepository) SettleCredit(ctx context.Context, id, actorID uint, settledAt time.Time) (bool, error) {
+	result := r.db.WithContext(ctx).
+		Model(&models.SellerCommissionCredit{}).
+		Where("id = ? AND status = ?", id, models.CommissionCreditStatusPending).
+		Updates(map[string]interface{}{
+			"status":     models.CommissionCreditStatusSettled,
+			"settled_at": settledAt,
+			"settled_by": actorID,
+		})
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected > 0, nil
 }

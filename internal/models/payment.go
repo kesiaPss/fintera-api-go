@@ -46,6 +46,7 @@ const (
 	PaymentStatusPaid         = "paid"
 	PaymentStatusRejected     = "rejected"
 	PaymentStatusReadjustment = "readjustment"
+	PaymentStatusCancelled    = "cancelled"
 )
 
 // Payment type constants
@@ -76,6 +77,13 @@ func (p *Payment) MayReject() bool {
 // MayUndo returns true if payment approval can be undone
 func (p *Payment) MayUndo() bool {
 	return p.Status == PaymentStatusPaid
+}
+
+// IsCancelled returns true when the payment belongs to a cancelled schedule.
+// Cancelled rows are preserved so the history stays intact, but collection
+// queries (pending/submitted) no longer pick them up.
+func (p *Payment) IsCancelled() bool {
+	return p.Status == PaymentStatusCancelled
 }
 
 // IsOverdue returns true if payment is past due date

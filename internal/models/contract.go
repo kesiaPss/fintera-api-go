@@ -128,9 +128,16 @@ func (c *Contract) MayReject() bool {
 
 // MayCancel returns true if contract can be cancelled
 func (c *Contract) MayCancel() bool {
-	return c.Status == ContractStatusPending ||
-		c.Status == ContractStatusSubmitted ||
-		c.Status == ContractStatusRejected
+	switch c.Status {
+	case ContractStatusPending,
+		ContractStatusSubmitted,
+		ContractStatusRejected,
+		ContractStatusApproved,
+		ContractStatusSigned:
+		return true
+	default:
+		return false
+	}
 }
 
 // MayClose returns true if contract can be closed
@@ -142,11 +149,6 @@ func (c *Contract) MayClose() bool {
 		return false
 	}
 	return *c.Balance <= 0
-}
-
-// MayReopen returns true if contract can be reopened
-func (c *Contract) MayReopen() bool {
-	return c.Status == ContractStatusClosed
 }
 
 // CalculateBalance calculates the current balance from ledger entries

@@ -765,6 +765,85 @@ const docTemplate = `{
                 }
             }
         },
+        "/commissions/credits": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Commission credits created by cancelled contracts with a paid commission. Sellers only see their own credits.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Commissions"
+                ],
+                "summary": "List commission credits",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/commissions/credits/{id}/apply": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Mark a pending commission credit as settled and record the acting admin. Admin only.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Commissions"
+                ],
+                "summary": "Apply commission credit",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Credit ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/commissions/exceptions": {
             "get": {
                 "security": [
@@ -4029,60 +4108,6 @@ const docTemplate = `{
                 }
             }
         },
-        "/projects/{project_id}/lots/{lot_id}/contracts/{contract_id}/reopen": {
-            "post": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "Reopen a cancelled contract (Admin)",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Contracts"
-                ],
-                "summary": "Reopen Contract",
-                "parameters": [
-                    {
-                        "type": "integer",
-                        "description": "Contract ID",
-                        "name": "contract_id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "type": "integer",
-                        "description": "Project ID",
-                        "name": "project_id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "type": "integer",
-                        "description": "Lot ID",
-                        "name": "lot_id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    }
-                }
-            }
-        },
         "/projects/{project_id}/lots/{lot_id}/photos": {
             "get": {
                 "security": [
@@ -7135,7 +7160,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "entry_type": {
-                    "description": "initial, payment, interest, prepayment, adjustment",
+                    "description": "initial, payment, interest, prepayment, adjustment, refund",
                     "type": "string"
                 },
                 "id": {

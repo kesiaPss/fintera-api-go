@@ -14,6 +14,8 @@ import (
 	"github.com/sjperalta/fintera-api/pkg/logger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 // Mock Repositories
@@ -240,6 +242,11 @@ func (m *mockPaymentRepo) Delete(ctx context.Context, id uint) error {
 
 func (m *mockPaymentRepo) DeleteByContract(ctx context.Context, contractID uint) error {
 	args := m.Called(ctx, contractID)
+	return args.Error(0)
+}
+
+func (m *mockPaymentRepo) UpdateStatusByContract(ctx context.Context, contractID uint, fromStatuses []string, toStatus string) error {
+	args := m.Called(ctx, contractID, fromStatuses, toStatus)
 	return args.Error(0)
 }
 
@@ -527,65 +534,148 @@ func TestContractService_Reject(t *testing.T) {
 	mockLotRepo.AssertExpectations(t)
 }
 
-func TestContractService_Cancel(t *testing.T) {
-	// Initialize logger to avoid nil pointer dereference
-	logger.Setup("test")
-
+func TestContractService_Cancel_ApprovedPreservesHistory(t *testing.T) {
 	ctx := context.Background()
-	mockContractRepo := new(mockContractRepo)
-	mockLotRepo := new(mockLotRepo)
-	mockUserRepo := new(mockUserRepoForContract)
-	mockPaymentRepo := new(mockPaymentRepo)
-	mockLedgerRepo := new(mockLedgerRepo)
+	service, contractRepo, lotRepo, _, paymentRepo, ledgerRepo, mockSQL := newContractServiceForActions(t)
 
-	gdb, mockSQL := setupMockDB(t)
-	mockSQL.ExpectQuery("INSERT INTO \"audit_logs\"").WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
-
-	auditSvc := NewAuditService(gdb)
-	worker := jobs.NewWorker(1)
-
-	cfg := &config.Config{ResendAPIKey: "mock-key"}
-	emailSvc := NewEmailService(cfg)
-	service := NewContractService(mockContractRepo, mockLotRepo, mockUserRepo, mockPaymentRepo, mockLedgerRepo, nil, emailSvc, auditSvc, worker)
-
+	amount, paid := 10000.0, 3000.0
 	contract := &models.Contract{
 		ID:              1,
 		LotID:           1,
-		Status:          models.ContractStatusSubmitted,
+		Status:          models.ContractStatusApproved,
 		ApplicantUserID: 2,
+		Amount:          &amount,
+		LedgerEntries: []models.ContractLedgerEntry{
+			{ID: 1, ContractID: 1, Amount: -amount, EntryType: models.EntryTypeInitial},
+			{ID: 2, ContractID: 1, Amount: paid, EntryType: models.EntryTypePayment},
+		},
 		Payments: []models.Payment{
 			{ID: 1, Status: models.PaymentStatusPending},
-			{ID: 2, Status: models.PaymentStatusPaid},
+			{ID: 2, Status: models.PaymentStatusSubmitted},
+			{ID: 3, Status: models.PaymentStatusPaid, PaidAmount: &paid},
 		},
 	}
 
-	lot := &models.Lot{
-		ID:     1,
-		Status: models.LotStatusFinanced,
-	}
+	mockSQL.ExpectQuery(`INSERT INTO "audit_logs"`).
+		WithArgs(uint(9), "CANCEL", "Contract", uint(1), sqlmock.AnyArg(), "", "", sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
 
-	mockContractRepo.On("FindByIDWithDetails", ctx, uint(1)).Return(contract, nil)
-	mockContractRepo.On("Update", ctx, mock.MatchedBy(func(c *models.Contract) bool {
-		return c.Status == models.ContractStatusCancelled && *c.Note == "User requested"
+	contractRepo.On("FindByIDWithDetails", ctx, uint(1)).Return(contract, nil)
+	contractRepo.On("Update", ctx, mock.MatchedBy(func(c *models.Contract) bool {
+		return c.Status == models.ContractStatusCancelled &&
+			!c.Active &&
+			c.Note != nil && *c.Note == "User requested" &&
+			c.Balance != nil && *c.Balance == 0
 	})).Return(nil)
+	paymentRepo.On("UpdateStatusByContract", ctx, uint(1),
+		[]string{models.PaymentStatusPending, models.PaymentStatusSubmitted},
+		models.PaymentStatusCancelled).Return(nil)
 
-	mockPaymentRepo.On("Delete", ctx, uint(1)).Return(nil)
-	mockLedgerRepo.On("DeleteByContractID", ctx, uint(1)).Return(nil)
+	var createdEntries []*models.ContractLedgerEntry
+	ledgerRepo.On("Create", ctx, mock.AnythingOfType("*models.ContractLedgerEntry")).
+		Run(func(args mock.Arguments) {
+			createdEntries = append(createdEntries, args.Get(1).(*models.ContractLedgerEntry))
+		}).
+		Return(nil)
 
-	mockLotRepo.On("FindByID", ctx, uint(1)).Return(lot, nil)
-	mockLotRepo.On("Update", ctx, mock.MatchedBy(func(l *models.Lot) bool {
+	contractRepo.On("FindActiveByLot", ctx, uint(1)).Return(nil, gorm.ErrRecordNotFound)
+	lotRepo.On("FindByID", ctx, uint(1)).Return(&models.Lot{ID: 1, Status: models.LotStatusFinanced}, nil)
+	lotRepo.On("Update", ctx, mock.MatchedBy(func(l *models.Lot) bool {
 		return l.Status == models.LotStatusAvailable
 	})).Return(nil)
 
-	result, err := service.Cancel(ctx, 1, "User requested")
+	result, err := service.Cancel(ctx, 1, "User requested", 9)
 
 	assert.NoError(t, err)
 	assert.Equal(t, models.ContractStatusCancelled, result.Status)
+	assert.False(t, result.Active)
 
-	mockContractRepo.AssertExpectations(t)
-	mockLotRepo.AssertExpectations(t)
-	mockPaymentRepo.AssertExpectations(t)
-	mockLedgerRepo.AssertExpectations(t)
+	// History is preserved: rows and ledger entries are never deleted.
+	paymentRepo.AssertNotCalled(t, "Delete", mock.Anything, mock.Anything)
+	paymentRepo.AssertNotCalled(t, "DeleteByContract", mock.Anything, mock.Anything)
+	ledgerRepo.AssertNotCalled(t, "DeleteByContractID", mock.Anything, mock.Anything)
+
+	// Refund (-paid) plus write-off (+amount) settle the existing ledger to zero.
+	assert.Len(t, createdEntries, 2)
+	balance := -amount + paid
+	for _, entry := range createdEntries {
+		balance += entry.Amount
+	}
+	assert.InDelta(t, 0, balance, 0.0001)
+	assert.Equal(t, models.PaymentStatusCancelled, result.Payments[0].Status)
+	assert.Equal(t, models.PaymentStatusCancelled, result.Payments[1].Status)
+	assert.Equal(t, models.PaymentStatusPaid, result.Payments[2].Status)
+
+	contractRepo.AssertExpectations(t)
+	lotRepo.AssertExpectations(t)
+	paymentRepo.AssertExpectations(t)
+	ledgerRepo.AssertExpectations(t)
+	assert.NoError(t, mockSQL.ExpectationsWereMet())
+}
+
+func TestContractService_Cancel_SignedContract(t *testing.T) {
+	ctx := context.Background()
+	service, contractRepo, lotRepo, _, paymentRepo, ledgerRepo, mockSQL := newContractServiceForActions(t)
+	mockSQL.ExpectQuery(`INSERT INTO "audit_logs"`).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
+
+	amount := 10000.0
+	contract := &models.Contract{
+		ID:              3,
+		LotID:           3,
+		Status:          models.ContractStatusSigned,
+		ApplicantUserID: 2,
+		Amount:          &amount,
+	}
+
+	contractRepo.On("FindByIDWithDetails", ctx, uint(3)).Return(contract, nil)
+	contractRepo.On("Update", ctx, mock.MatchedBy(func(c *models.Contract) bool {
+		return c.Status == models.ContractStatusCancelled && !c.Active
+	})).Return(nil)
+	paymentRepo.On("UpdateStatusByContract", ctx, uint(3),
+		[]string{models.PaymentStatusPending, models.PaymentStatusSubmitted},
+		models.PaymentStatusCancelled).Return(nil)
+	ledgerRepo.On("Create", ctx, mock.MatchedBy(func(e *models.ContractLedgerEntry) bool {
+		return e.EntryType == models.EntryTypeAdjustment && e.Amount == amount
+	})).Return(nil)
+	contractRepo.On("FindActiveByLot", ctx, uint(3)).Return(nil, gorm.ErrRecordNotFound)
+	lotRepo.On("FindByID", ctx, uint(3)).Return(nil, nil)
+
+	result, err := service.Cancel(ctx, 3, "Signed sale cancelled", 9)
+
+	assert.NoError(t, err)
+	assert.Equal(t, models.ContractStatusCancelled, result.Status)
+	contractRepo.AssertExpectations(t)
+	paymentRepo.AssertExpectations(t)
+	ledgerRepo.AssertExpectations(t)
+}
+
+func TestContractService_Cancel_DoesNotReleaseLotWithAnotherActiveContract(t *testing.T) {
+	ctx := context.Background()
+	service, contractRepo, lotRepo, _, paymentRepo, ledgerRepo, mockSQL := newContractServiceForActions(t)
+	mockSQL.ExpectQuery(`INSERT INTO "audit_logs"`).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
+
+	amount := 10000.0
+	contract := &models.Contract{
+		ID:              4,
+		LotID:           4,
+		Status:          models.ContractStatusApproved,
+		ApplicantUserID: 2,
+		Amount:          &amount,
+	}
+
+	contractRepo.On("FindByIDWithDetails", ctx, uint(4)).Return(contract, nil)
+	contractRepo.On("Update", ctx, mock.AnythingOfType("*models.Contract")).Return(nil)
+	paymentRepo.On("UpdateStatusByContract", ctx, uint(4),
+		[]string{models.PaymentStatusPending, models.PaymentStatusSubmitted},
+		models.PaymentStatusCancelled).Return(nil)
+	ledgerRepo.On("Create", ctx, mock.AnythingOfType("*models.ContractLedgerEntry")).Return(nil)
+	contractRepo.On("FindActiveByLot", ctx, uint(4)).Return(&models.Contract{ID: 99, LotID: 4, Active: true}, nil)
+
+	_, err := service.Cancel(ctx, 4, "Duplicate sale", 9)
+
+	assert.NoError(t, err)
+	lotRepo.AssertNotCalled(t, "FindByID", mock.Anything, mock.Anything)
+	lotRepo.AssertNotCalled(t, "Update", mock.Anything, mock.Anything)
 }
 
 func newPrepaymentService() (*ContractService, *mockContractRepo, *mockPaymentRepo, *mockLedgerRepo) {
@@ -1150,7 +1240,7 @@ func TestContractService_Update(t *testing.T) {
 
 func TestContractService_ReleaseUnpaidReservations(t *testing.T) {
 	ctx := context.Background()
-	service, contractRepo, lotRepo, _, _, ledgerRepo, mockSQL := newContractServiceForActions(t)
+	service, contractRepo, lotRepo, _, paymentRepo, _, mockSQL := newContractServiceForActions(t)
 	mockSQL.ExpectQuery(`INSERT INTO "audit_logs"`).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
 
 	stale := []models.Contract{
@@ -1161,7 +1251,10 @@ func TestContractService_ReleaseUnpaidReservations(t *testing.T) {
 	contractRepo.On("Update", ctx, mock.MatchedBy(func(c *models.Contract) bool {
 		return c.Status == models.ContractStatusCancelled
 	})).Return(nil)
-	ledgerRepo.On("DeleteByContractID", ctx, uint(1)).Return(nil)
+	paymentRepo.On("UpdateStatusByContract", ctx, uint(1),
+		[]string{models.PaymentStatusPending, models.PaymentStatusSubmitted},
+		models.PaymentStatusCancelled).Return(nil)
+	contractRepo.On("FindActiveByLot", ctx, uint(1)).Return(nil, gorm.ErrRecordNotFound)
 	lotRepo.On("FindByID", ctx, uint(1)).Return(&models.Lot{ID: 1, Status: models.LotStatusReserved}, nil)
 	lotRepo.On("Update", ctx, mock.MatchedBy(func(l *models.Lot) bool {
 		return l.Status == models.LotStatusAvailable
@@ -1172,6 +1265,7 @@ func TestContractService_ReleaseUnpaidReservations(t *testing.T) {
 	assert.NoError(t, err)
 	contractRepo.AssertExpectations(t)
 	lotRepo.AssertExpectations(t)
+	paymentRepo.AssertExpectations(t)
 }
 
 func TestContractService_MarkCommissionPaid(t *testing.T) {
@@ -1237,4 +1331,85 @@ func TestContractService_MarkCommissionPaid_RejectsAlreadyPaid(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "ya fue marcada")
 	contractRepo.AssertExpectations(t)
+}
+
+func TestContractService_CancelCreatesCommissionCreditWhenPaid(t *testing.T) {
+	ctx := context.Background()
+	service, contractRepo, lotRepo, _, paymentRepo, ledgerRepo, mockSQL := newContractServiceForActions(t)
+	mockSQL.ExpectQuery(`INSERT INTO "audit_logs"`).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
+
+	commissionRepo := newFakeCommissionRepository()
+	service.SetCommissionService(NewCommissionService(commissionRepo, nil, nil))
+
+	amount, commission := 10000.0, 1500.0
+	sellerID := uint(7)
+	paidAt := time.Now()
+	contract := &models.Contract{
+		ID:               1,
+		LotID:            1,
+		Status:           models.ContractStatusApproved,
+		ApplicantUserID:  2,
+		SellerID:         &sellerID,
+		Amount:           &amount,
+		CommissionAmount: commission,
+		CommissionPaidAt: &paidAt,
+	}
+
+	contractRepo.On("FindByIDWithDetails", ctx, uint(1)).Return(contract, nil)
+	contractRepo.On("Update", ctx, mock.AnythingOfType("*models.Contract")).Return(nil)
+	paymentRepo.On("UpdateStatusByContract", ctx, uint(1),
+		[]string{models.PaymentStatusPending, models.PaymentStatusSubmitted},
+		models.PaymentStatusCancelled).Return(nil)
+	ledgerRepo.On("Create", ctx, mock.AnythingOfType("*models.ContractLedgerEntry")).Return(nil)
+	contractRepo.On("FindActiveByLot", ctx, uint(1)).Return(nil, gorm.ErrRecordNotFound)
+	lotRepo.On("FindByID", ctx, uint(1)).Return(&models.Lot{ID: 1}, nil)
+	lotRepo.On("Update", ctx, mock.AnythingOfType("*models.Lot")).Return(nil)
+
+	_, err := service.Cancel(ctx, 1, "Sale cancelled", 9)
+
+	assert.NoError(t, err)
+	require.Len(t, commissionRepo.credits, 1)
+	for _, credit := range commissionRepo.credits {
+		assert.Equal(t, sellerID, credit.SellerID)
+		assert.Equal(t, uint(1), credit.ContractID)
+		assert.Equal(t, commission, credit.Amount)
+		assert.Equal(t, models.CommissionCreditStatusPending, credit.Status)
+	}
+	assert.NoError(t, mockSQL.ExpectationsWereMet())
+}
+
+func TestContractService_CancelSkipsCommissionCreditWhenUnpaid(t *testing.T) {
+	ctx := context.Background()
+	service, contractRepo, lotRepo, _, paymentRepo, ledgerRepo, mockSQL := newContractServiceForActions(t)
+	mockSQL.ExpectQuery(`INSERT INTO "audit_logs"`).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
+
+	commissionRepo := newFakeCommissionRepository()
+	service.SetCommissionService(NewCommissionService(commissionRepo, nil, nil))
+
+	amount := 10000.0
+	sellerID := uint(7)
+	contract := &models.Contract{
+		ID:               1,
+		LotID:            1,
+		Status:           models.ContractStatusApproved,
+		ApplicantUserID:  2,
+		SellerID:         &sellerID,
+		Amount:           &amount,
+		CommissionAmount: 1500,
+	}
+
+	contractRepo.On("FindByIDWithDetails", ctx, uint(1)).Return(contract, nil)
+	contractRepo.On("Update", ctx, mock.AnythingOfType("*models.Contract")).Return(nil)
+	paymentRepo.On("UpdateStatusByContract", ctx, uint(1),
+		[]string{models.PaymentStatusPending, models.PaymentStatusSubmitted},
+		models.PaymentStatusCancelled).Return(nil)
+	ledgerRepo.On("Create", ctx, mock.AnythingOfType("*models.ContractLedgerEntry")).Return(nil)
+	contractRepo.On("FindActiveByLot", ctx, uint(1)).Return(nil, gorm.ErrRecordNotFound)
+	lotRepo.On("FindByID", ctx, uint(1)).Return(&models.Lot{ID: 1}, nil)
+	lotRepo.On("Update", ctx, mock.AnythingOfType("*models.Lot")).Return(nil)
+
+	_, err := service.Cancel(ctx, 1, "Sale cancelled", 9)
+
+	assert.NoError(t, err)
+	assert.Empty(t, commissionRepo.credits, "an unpaid commission must not create a credit")
 }

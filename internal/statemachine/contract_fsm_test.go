@@ -83,6 +83,8 @@ func TestContractFSM_Cancel(t *testing.T) {
 		models.ContractStatusPending,
 		models.ContractStatusSubmitted,
 		models.ContractStatusRejected,
+		models.ContractStatusApproved,
+		models.ContractStatusSigned,
 	)
 
 	for _, status := range contractStatuses {
@@ -126,22 +128,12 @@ func TestContractFSM_Submit(t *testing.T) {
 	}
 }
 
-func TestContractFSM_Reopen(t *testing.T) {
-	ctx := context.Background()
-
+func TestContractFSM_ReopenIsNotAvailable(t *testing.T) {
 	for _, status := range contractStatuses {
 		t.Run("from "+status, func(t *testing.T) {
-			contract := &models.Contract{Status: status}
-
-			err := NewContractFSM(contract).Reopen(ctx)
-
-			if status == models.ContractStatusClosed {
-				assert.NoError(t, err)
-				assert.Equal(t, models.ContractStatusApproved, contract.Status)
-				return
-			}
-			assert.Error(t, err)
-			assert.Equal(t, status, contract.Status, "status must not change on a rejected transition")
+			machine := NewContractFSM(&models.Contract{Status: status})
+			assert.False(t, machine.Can("reopen"), "reopen must not be a valid event")
+			assert.Equal(t, status, machine.Current())
 		})
 	}
 }

@@ -32,14 +32,11 @@ func NewContractFSM(contract *models.Contract) *ContractFSM {
 			// pending/submitted → rejected
 			{Name: "reject", Src: []string{models.ContractStatusPending, models.ContractStatusSubmitted}, Dst: models.ContractStatusRejected},
 
-			// pending/submitted/rejected → cancelled
-			{Name: "cancel", Src: []string{models.ContractStatusPending, models.ContractStatusSubmitted, models.ContractStatusRejected}, Dst: models.ContractStatusCancelled},
+			// pending/submitted/rejected/approved/signed → cancelled
+			{Name: "cancel", Src: []string{models.ContractStatusPending, models.ContractStatusSubmitted, models.ContractStatusRejected, models.ContractStatusApproved, models.ContractStatusSigned}, Dst: models.ContractStatusCancelled},
 
 			// approved → closed
 			{Name: "close", Src: []string{models.ContractStatusApproved}, Dst: models.ContractStatusClosed},
-
-			// closed → approved (reopen)
-			{Name: "reopen", Src: []string{models.ContractStatusClosed}, Dst: models.ContractStatusApproved},
 		},
 		fsm.Callbacks{},
 	)
@@ -111,20 +108,6 @@ func (c *ContractFSM) Close(ctx context.Context) error {
 
 	if err := c.fsm.Event(ctx, "close"); err != nil {
 		return fmt.Errorf("failed to close contract: %w", err)
-	}
-
-	c.contract.Status = c.fsm.Current()
-	return nil
-}
-
-// Reopen transitions contract from closed back to approved
-func (c *ContractFSM) Reopen(ctx context.Context) error {
-	if !c.contract.MayReopen() {
-		return fmt.Errorf("contract cannot be reopened in current state: %s", c.contract.Status)
-	}
-
-	if err := c.fsm.Event(ctx, "reopen"); err != nil {
-		return fmt.Errorf("failed to reopen contract: %w", err)
 	}
 
 	c.contract.Status = c.fsm.Current()

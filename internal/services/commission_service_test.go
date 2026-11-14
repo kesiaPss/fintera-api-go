@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/sjperalta/fintera-api/internal/models"
 	"github.com/sjperalta/fintera-api/internal/repository"
 	"github.com/stretchr/testify/assert"
@@ -14,18 +15,22 @@ import (
 
 type fakeCommissionRepository struct {
 	repository.CommissionRepository
-	settings   models.CommissionSettings
-	exceptions map[uint]*models.SellerCommissionRate
-	nextID     uint
-	deleted    []uint
+	settings     models.CommissionSettings
+	exceptions   map[uint]*models.SellerCommissionRate
+	credits      map[uint]*models.SellerCommissionCredit
+	nextID       uint
+	nextCreditID uint
+	deleted      []uint
 }
 
 func newFakeCommissionRepository() *fakeCommissionRepository {
 	settings := models.DefaultCommissionSettings()
 	return &fakeCommissionRepository{
-		settings:   settings,
-		exceptions: make(map[uint]*models.SellerCommissionRate),
-		nextID:     1,
+		settings:     settings,
+		exceptions:   make(map[uint]*models.SellerCommissionRate),
+		credits:      make(map[uint]*models.SellerCommissionCredit),
+		nextID:       1,
+		nextCreditID: 1,
 	}
 }
 
@@ -86,6 +91,51 @@ func (r *fakeCommissionRepository) DeleteSellerRate(_ context.Context, id uint) 
 		}
 	}
 	return gormRecordNotFound()
+}
+
+func (r *fakeCommissionRepository) CreateCredit(_ context.Context, credit *models.SellerCommissionCredit) error {
+	credit.ID = r.nextCreditID
+	r.nextCreditID++
+	if credit.Status == "" {
+		credit.Status = models.CommissionCreditStatusPending
+	}
+	copy := *credit
+	r.credits[credit.ID] = &copy
+	return nil
+}
+
+func (r *fakeCommissionRepository) FindCreditByID(_ context.Context, id uint) (*models.SellerCommissionCredit, error) {
+	credit, ok := r.credits[id]
+	if !ok {
+		return nil, gormRecordNotFound()
+	}
+	copy := *credit
+	return &copy, nil
+}
+
+func (r *fakeCommissionRepository) ListCredits(_ context.Context, sellerID uint) ([]models.SellerCommissionCredit, error) {
+	credits := make([]models.SellerCommissionCredit, 0, len(r.credits))
+	for _, credit := range r.credits {
+		if sellerID > 0 && credit.SellerID != sellerID {
+			continue
+		}
+		credits = append(credits, *credit)
+	}
+	return credits, nil
+}
+
+func (r *fakeCommissionRepository) SettleCredit(_ context.Context, id, actorID uint, settledAt time.Time) (bool, error) {
+	credit, ok := r.credits[id]
+	if !ok {
+		return false, gormRecordNotFound()
+	}
+	if credit.Status == models.CommissionCreditStatusSettled {
+		return false, nil
+	}
+	credit.Status = models.CommissionCreditStatusSettled
+	credit.SettledAt = &settledAt
+	credit.SettledBy = &actorID
+	return true, nil
 }
 
 type fakeCommissionUserRepository struct {
@@ -233,4 +283,121 @@ func TestCommissionRulesAndExceptionsCRUD(t *testing.T) {
 	require.NoError(t, service.DeleteException(ctx, 1, exception.ID))
 	assert.Empty(t, repo.exceptions)
 	assert.ErrorIs(t, service.DeleteException(ctx, 1, exception.ID), ErrCommissionExceptionMissing)
+}
+
+func TestCommissionService_CreateCancellationCredit(t *testing.T) {
+	repo := newFakeCommissionRepository()
+	service := NewCommissionService(repo, nil, nil)
+
+	paidAt := time.Now()
+	sellerID := uint(7)
+	contract := &models.Contract{
+		ID:               11,
+		SellerID:         &sellerID,
+		CommissionAmount: 1500,
+		CommissionPaidAt: &paidAt,
+	}
+
+	credit, err := service.CreateCancellationCredit(context.Background(), contract)
+
+	require.NoError(t, err)
+	require.NotNil(t, credit)
+	assert.Equal(t, sellerID, credit.SellerID)
+	assert.Equal(t, uint(11), credit.ContractID)
+	assert.Equal(t, 1500.0, credit.Amount)
+	assert.Equal(t, models.CommissionCreditStatusPending, credit.Status)
+	require.Len(t, repo.credits, 1)
+}
+
+func TestCommissionService_CreateCancellationCredit_SkipsUnpaidCommission(t *testing.T) {
+	repo := newFakeCommissionRepository()
+	service := NewCommissionService(repo, nil, nil)
+
+	sellerID := uint(7)
+	contract := &models.Contract{
+		ID:               11,
+		SellerID:         &sellerID,
+		CommissionAmount: 1500,
+	}
+
+	credit, err := service.CreateCancellationCredit(context.Background(), contract)
+
+	require.NoError(t, err)
+	assert.Nil(t, credit)
+	assert.Empty(t, repo.credits, "a contract without a paid commission must not create a credit")
+}
+
+func TestCommissionService_ApplyCredit(t *testing.T) {
+	repo := newFakeCommissionRepository()
+	gdb, mockSQL := setupMockDB(t)
+	mockSQL.ExpectQuery(`INSERT INTO "audit_logs"`).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
+	service := NewCommissionService(repo, nil, NewAuditService(gdb))
+
+	seller := &models.User{ID: 7, FullName: "Ana Vendedora", Role: models.RoleSeller}
+	require.NoError(t, repo.CreateCredit(context.Background(), &models.SellerCommissionCredit{
+		SellerID:   seller.ID,
+		ContractID: 11,
+		Amount:     1500,
+		Status:     models.CommissionCreditStatusPending,
+	}))
+	// FindCreditByID preloads the seller in production; mirror it in the fake.
+	repo.credits[1].Seller = seller
+
+	credit, err := service.ApplyCredit(context.Background(), 3, 1)
+
+	require.NoError(t, err)
+	assert.Equal(t, models.CommissionCreditStatusSettled, credit.Status)
+	assert.NotNil(t, credit.SettledAt)
+	require.NotNil(t, credit.SettledBy)
+	assert.Equal(t, uint(3), *credit.SettledBy)
+	assert.Equal(t, "Ana Vendedora", credit.Seller)
+	assert.NoError(t, mockSQL.ExpectationsWereMet())
+}
+
+func TestCommissionService_ApplyCredit_IsIdempotent(t *testing.T) {
+	repo := newFakeCommissionRepository()
+	service := NewCommissionService(repo, nil, nil)
+	require.NoError(t, repo.CreateCredit(context.Background(), &models.SellerCommissionCredit{
+		SellerID:   7,
+		ContractID: 11,
+		Amount:     1500,
+		Status:     models.CommissionCreditStatusPending,
+	}))
+
+	_, err := service.ApplyCredit(context.Background(), 3, 1)
+	require.NoError(t, err)
+
+	_, err = service.ApplyCredit(context.Background(), 3, 1)
+	assert.ErrorIs(t, err, ErrCommissionCreditSettled)
+}
+
+func TestCommissionService_ApplyCredit_Missing(t *testing.T) {
+	service := NewCommissionService(newFakeCommissionRepository(), nil, nil)
+
+	_, err := service.ApplyCredit(context.Background(), 3, 99)
+
+	assert.ErrorIs(t, err, ErrCommissionCreditMissing)
+}
+
+func TestCommissionService_ListCreditsFiltersSeller(t *testing.T) {
+	repo := newFakeCommissionRepository()
+	service := NewCommissionService(repo, nil, nil)
+	for _, credit := range []*models.SellerCommissionCredit{
+		{SellerID: 7, ContractID: 11, Amount: 500},
+		{SellerID: 7, ContractID: 12, Amount: 250},
+		{SellerID: 8, ContractID: 13, Amount: 900},
+	} {
+		require.NoError(t, repo.CreateCredit(context.Background(), credit))
+	}
+
+	all, err := service.ListCredits(context.Background(), 0)
+	require.NoError(t, err)
+	assert.Len(t, all, 3)
+
+	own, err := service.ListCredits(context.Background(), 7)
+	require.NoError(t, err)
+	require.Len(t, own, 2)
+	for _, credit := range own {
+		assert.Equal(t, uint(7), credit.SellerID)
+	}
 }

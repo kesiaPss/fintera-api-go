@@ -548,6 +548,10 @@ type PaymentRepository interface {
 	Update(ctx context.Context, payment *models.Payment) error
 	Delete(ctx context.Context, id uint) error
 	DeleteByContract(ctx context.Context, contractID uint) error
+	// UpdateStatusByContract updates every payment of a contract whose status
+	// is in fromStatuses. It keeps the rows (history) while moving a whole
+	// schedule to a terminal status such as cancelled.
+	UpdateStatusByContract(ctx context.Context, contractID uint, fromStatuses []string, toStatus string) error
 	List(ctx context.Context, query *ListQuery) ([]models.Payment, int64, error)
 	FindOverdue(ctx context.Context) ([]models.Payment, error)
 	FindOverdueForActiveContracts(ctx context.Context) ([]models.Payment, error)
@@ -609,6 +613,16 @@ func (r *paymentRepository) Delete(ctx context.Context, id uint) error {
 
 func (r *paymentRepository) DeleteByContract(ctx context.Context, contractID uint) error {
 	return r.db.WithContext(ctx).Where("contract_id = ?", contractID).Delete(&models.Payment{}).Error
+}
+
+func (r *paymentRepository) UpdateStatusByContract(ctx context.Context, contractID uint, fromStatuses []string, toStatus string) error {
+	if len(fromStatuses) == 0 {
+		return nil
+	}
+	return r.db.WithContext(ctx).
+		Model(&models.Payment{}).
+		Where("contract_id = ? AND status IN ?", contractID, fromStatuses).
+		Update("status", toStatus).Error
 }
 
 func (r *paymentRepository) List(ctx context.Context, query *ListQuery) ([]models.Payment, int64, error) {

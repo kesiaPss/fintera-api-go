@@ -365,7 +365,7 @@ definitions:
       entry_date:
         type: string
       entry_type:
-        description: initial, payment, interest, prepayment, adjustment
+        description: initial, payment, interest, prepayment, adjustment, refund
         type: string
       id:
         type: integer
@@ -1826,6 +1826,58 @@ paths:
       summary: Upload Branding Logo
       tags:
       - Branding
+  /commissions/credits:
+    get:
+      description: Commission credits created by cancelled contracts with a paid commission.
+        Sellers only see their own credits.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: List commission credits
+      tags:
+      - Commissions
+  /commissions/credits/{id}/apply:
+    post:
+      description: Mark a pending commission credit as settled and record the acting
+        admin. Admin only.
+      parameters:
+      - description: Credit ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Apply commission credit
+      tags:
+      - Commissions
   /commissions/exceptions:
     get:
       description: Per-seller commission-rate exceptions. Admin only.
@@ -3874,41 +3926,6 @@ paths:
       security:
       - BearerAuth: []
       summary: Reject Contract
-      tags:
-      - Contracts
-  /projects/{project_id}/lots/{lot_id}/contracts/{contract_id}/reopen:
-    post:
-      consumes:
-      - application/json
-      description: Reopen a cancelled contract (Admin)
-      parameters:
-      - description: Contract ID
-        in: path
-        name: contract_id
-        required: true
-        type: integer
-      - description: Project ID
-        in: path
-        name: project_id
-        required: true
-        type: integer
-      - description: Lot ID
-        in: path
-        name: lot_id
-        required: true
-        type: integer
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      security:
-      - BearerAuth: []
-      summary: Reopen Contract
       tags:
       - Contracts
   /projects/{project_id}/lots/{lot_id}/photos:

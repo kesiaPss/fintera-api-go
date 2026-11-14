@@ -11,7 +11,7 @@ type ContractLedgerEntry struct {
 	PaymentID   *uint     `json:"payment_id,omitempty" gorm:"index"`
 	Amount      float64   `json:"amount" gorm:"not null"` // Negative for credits (payments), positive for debits (charges)
 	Description string    `json:"description" gorm:"not null"`
-	EntryType   string    `json:"entry_type" gorm:"not null;index"` // initial, payment, interest, prepayment, adjustment
+	EntryType   string    `json:"entry_type" gorm:"not null;index"` // initial, payment, interest, prepayment, adjustment, refund
 	EntryDate   time.Time `json:"entry_date" gorm:"not null;default:current_timestamp"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
@@ -28,6 +28,7 @@ const (
 	EntryTypeInterest   = "interest"   // Overdue interest (debit)
 	EntryTypePrepayment = "prepayment" // Capital repayment (credit)
 	EntryTypeAdjustment = "adjustment" // Manual adjustment or reversal
+	EntryTypeRefund     = "refund"     // Paid amount returned when a contract is cancelled (debit)
 )
 
 // TableName specifies the table name for GORM

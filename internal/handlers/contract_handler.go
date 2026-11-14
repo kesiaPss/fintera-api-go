@@ -824,28 +824,12 @@ func (h *ContractHandler) Cancel(c *gin.Context) {
 		return
 	}
 
-	contract, err := h.contractService.Cancel(c.Request.Context(), uint(id), req.Note)
+	contract, err := h.contractService.Cancel(c.Request.Context(), uint(id), req.Note, middleware.GetUserID(c))
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"contract": contract.ToResponse(), "message": "Contrato cancelado"})
-}
-
-// @Summary Reopen Contract
-// @Description Reopen a cancelled contract (Admin)
-// @Tags Contracts
-// @Accept json
-// @Produce json
-// @Param contract_id path int true "Contract ID"
-// @Param project_id path int true "Project ID"
-// @Param lot_id path int true "Lot ID"
-// @Success 200 {object} map[string]string
-// @Security BearerAuth
-// @Router /projects/{project_id}/lots/{lot_id}/contracts/{contract_id}/reopen [post]
-func (h *ContractHandler) Reopen(c *gin.Context) {
-	// TODO: Implement
-	c.JSON(http.StatusOK, gin.H{"message": "Contrato reabierto"})
 }
 
 type CapitalRepaymentRequest struct {

@@ -232,6 +232,94 @@ func (s *CommissionService) EnsureContractCommission(ctx context.Context, contra
 	return nil
 }
 
+// CreateCancellationCredit registers a recoverable credit for a commission that
+// was already paid to the seller and is reversed by the cancellation. It is a
+// no-op when there is no seller or no positive amount to recover.
+func (s *CommissionService) CreateCancellationCredit(ctx context.Context, contract *models.Contract) (*models.SellerCommissionCredit, error) {
+	if s == nil || s.repo == nil || contract == nil || contract.CommissionPaidAt == nil {
+		return nil, nil
+	}
+	if contract.SellerID == nil {
+		return nil, nil
+	}
+	amount := contract.CommissionAmount
+	if amount <= 0 {
+		amount = contract.CalculateCommission()
+	}
+	if amount <= 0 {
+		return nil, nil
+	}
+
+	credit := &models.SellerCommissionCredit{
+		SellerID:   *contract.SellerID,
+		ContractID: contract.ID,
+		Amount:     amount,
+		Status:     models.CommissionCreditStatusPending,
+	}
+	if err := s.repo.CreateCredit(ctx, credit); err != nil {
+		return nil, err
+	}
+	return credit, nil
+}
+
+// ListCredits returns the seller commission credits, filtered to one seller when
+// sellerID is greater than zero.
+func (s *CommissionService) ListCredits(ctx context.Context, sellerID uint) ([]models.SellerCommissionCreditResponse, error) {
+	if s == nil || s.repo == nil {
+		return []models.SellerCommissionCreditResponse{}, nil
+	}
+	credits, err := s.repo.ListCredits(ctx, sellerID)
+	if err != nil {
+		return nil, err
+	}
+	responses := make([]models.SellerCommissionCreditResponse, 0, len(credits))
+	for i := range credits {
+		responses = append(responses, credits[i].ToResponse())
+	}
+	return responses, nil
+}
+
+// ApplyCredit settles a pending credit and records the admin who applied it.
+func (s *CommissionService) ApplyCredit(ctx context.Context, actorID, id uint) (*models.SellerCommissionCreditResponse, error) {
+	if s == nil || s.repo == nil {
+		return nil, ErrCommissionCreditMissing
+	}
+	credit, err := s.repo.FindCreditByID(ctx, id)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrCommissionCreditMissing
+		}
+		return nil, err
+	}
+	if credit.Status == models.CommissionCreditStatusSettled {
+		return nil, ErrCommissionCreditSettled
+	}
+
+	now := time.Now()
+	applied, err := s.repo.SettleCredit(ctx, id, actorID, now)
+	if err != nil {
+		return nil, err
+	}
+	if !applied {
+		return nil, ErrCommissionCreditSettled
+	}
+	credit.Status = models.CommissionCreditStatusSettled
+	credit.SettledAt = &now
+	credit.SettledBy = &actorID
+
+	if s.auditSvc != nil {
+		name := fmt.Sprintf("vendedor #%d", credit.SellerID)
+		if credit.Seller != nil && credit.Seller.FullName != "" {
+			name = credit.Seller.FullName
+		}
+		logIgnoredError("audit commission credit apply", s.auditSvc.Log(ctx, actorID, "COMMISSION_CREDIT_APPLY", "SellerCommissionCredit", credit.ID,
+			fmt.Sprintf("Crédito de comisión aplicado a %s: L%.2f (contrato #%d)", name, credit.Amount, credit.ContractID), "", ""))
+	}
+
+	response := credit.ToResponse()
+	return &response, nil
+}
+
 func (s *CommissionService) settings(ctx context.Context) (*models.CommissionSettings, error) {
 	if s == nil || s.repo == nil {
 		defaults := models.DefaultCommissionSettings()

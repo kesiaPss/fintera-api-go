@@ -27,6 +27,8 @@ var (
 	ErrInvalidCommissionRate      = errors.New("la tasa de comisión debe estar entre 0 y 100")
 	ErrInvalidCommissionRules     = errors.New("reglas de comisión inválidas")
 	ErrCommissionExceptionMissing = errors.New("excepción de comisión no encontrada")
+	ErrCommissionCreditMissing    = errors.New("crédito de comisión no encontrado")
+	ErrCommissionCreditSettled    = errors.New("el crédito de comisión ya fue aplicado")
 	ErrHistoricalSaleNotFound     = errors.New("venta histórica no encontrada")
 	ErrHistoricalSaleForbidden    = errors.New("no tienes permiso para modificar esta venta histórica")
 	ErrHistoricalSaleInvalid      = errors.New("datos de la venta histórica inválidos")
