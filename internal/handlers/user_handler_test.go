@@ -10,12 +10,15 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/gin-gonic/gin"
 	"github.com/sjperalta/fintera-api/internal/models"
 	"github.com/sjperalta/fintera-api/internal/repository"
 	"github.com/sjperalta/fintera-api/internal/services"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
 )
 
 func TestCreateUserRequestBinding(t *testing.T) {
@@ -258,6 +261,55 @@ func TestUserHandler_Show_IncludesClientsCount(t *testing.T) {
 	}
 	assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &payload))
 	assert.Equal(t, int64(7), payload.User.ClientsCount)
+}
+
+func TestUserHandler_Update_EmailNotifications(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	db, mockDB, err := sqlmock.New()
+	require.NoError(t, err)
+	gdb, err := gorm.Open(postgres.New(postgres.Config{Conn: db, DriverName: "postgres"}), &gorm.Config{
+		SkipDefaultTransaction: true,
+	})
+	require.NoError(t, err)
+	mockDB.ExpectQuery(`INSERT INTO "audit_logs"`).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
+
+	user := &models.User{ID: 5, Email: "cliente@example.com", Role: models.RoleUser, EmailNotifications: true}
+	mockRepo := &mockUserRepo{}
+	mockRepo.mockFindByID = func(context.Context, uint) (*models.User, error) {
+		return user, nil
+	}
+	var updated *models.User
+	mockRepo.mockUpdate = func(_ context.Context, u *models.User) error {
+		updated = u
+		return nil
+	}
+
+	userService := services.NewUserService(mockRepo, nil, nil, nil, services.NewAuditService(gdb), nil)
+	handler := NewUserHandler(userService, nil, nil, nil)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request, _ = http.NewRequest(http.MethodPut, "/users/5", bytes.NewBufferString(`{"email_notifications": false}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Params = gin.Params{{Key: "user_id", Value: "5"}}
+	c.Set("userID", uint(5))
+	c.Set("userRole", models.RoleUser) // owner, not admin
+
+	handler.Update(c)
+
+	assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.NotNil(t, updated)
+	assert.False(t, updated.EmailNotifications, "owner should be able to opt out")
+
+	var payload struct {
+		User struct {
+			EmailNotifications bool `json:"email_notifications"`
+		} `json:"user"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &payload))
+	assert.False(t, payload.User.EmailNotifications, "response must expose the stored preference")
+	assert.NoError(t, mockDB.ExpectationsWereMet())
 }
 
 func TestUploadProfilePicture(t *testing.T) {

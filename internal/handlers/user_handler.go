@@ -342,7 +342,7 @@ func (h *UserHandler) Create(c *gin.Context) {
 }
 
 // @Summary Update User
-// @Description Update user details (admin: any field; owner: full_name, phone, address, locale, identity, rtn only)
+// @Description Update user details (admin: any field; owner: full_name, phone, address, locale, identity, rtn, email_notifications only)
 // @Tags Users
 // @Accept json
 // @Produce json
@@ -404,6 +404,9 @@ func (h *UserHandler) Update(c *gin.Context) {
 	}
 	if v, ok := req["rtn"].(string); ok {
 		user.RTN = v
+	}
+	if v, ok := req["email_notifications"].(bool); ok {
+		user.EmailNotifications = v
 	}
 
 	// Only admin may change role, status, or email

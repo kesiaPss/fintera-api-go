@@ -1023,6 +1023,8 @@ definitions:
         type: integer
       email:
         type: string
+      email_notifications:
+        type: boolean
       full_name:
         type: string
       id:
@@ -1083,6 +1085,8 @@ definitions:
         type: integer
       email:
         type: string
+      email_notifications:
+        type: boolean
       full_name:
         type: string
       id:
@@ -5111,7 +5115,7 @@ paths:
       consumes:
       - application/json
       description: 'Update user details (admin: any field; owner: full_name, phone,
-        address, locale, identity, rtn only)'
+        address, locale, identity, rtn, email_notifications only)'
       parameters:
       - description: User ID
         in: path
