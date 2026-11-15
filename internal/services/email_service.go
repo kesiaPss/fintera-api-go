@@ -108,6 +108,19 @@ func (s *EmailService) checkEmailPreconditions(user *models.User, operation stri
 	return true, nil
 }
 
+// checkNotificationPreconditions applies the user's email_notifications
+// preference on top of the global email checks. It is meant for notification
+// emails (contract/payment reminders and updates): when the user opted out the
+// email is skipped without an error. Security and account emails must keep
+// using checkEmailPreconditions so they can never be silenced.
+func (s *EmailService) checkNotificationPreconditions(user *models.User, operation string) (bool, error) {
+	if !user.EmailNotifications {
+		logger.Info(fmt.Sprintf("🔕 [Notifications Disabled] Skipping %s to %s (user %d opted out)", operation, user.Email, user.ID))
+		return false, nil
+	}
+	return s.checkEmailPreconditions(user, operation)
+}
+
 func (s *EmailService) SendRecoveryCode(ctx context.Context, user *models.User, code string) error {
 	if ok, err := s.checkEmailPreconditions(user, "recovery email"); !ok {
 		return err
@@ -188,7 +201,7 @@ func (s *EmailService) SendAccountCreated(ctx context.Context, user *models.User
 }
 
 func (s *EmailService) SendContractSubmitted(ctx context.Context, contract *models.Contract) error {
-	if ok, err := s.checkEmailPreconditions(&contract.ApplicantUser, "contract submitted email"); !ok {
+	if ok, err := s.checkNotificationPreconditions(&contract.ApplicantUser, "contract submitted email"); !ok {
 		return err
 	}
 
@@ -252,7 +265,7 @@ func (s *EmailService) SendContractSubmitted(ctx context.Context, contract *mode
 // SendReservationVoucherReminder warns a customer that their 48h hold is about
 // to expire and that the reservation voucher is still missing.
 func (s *EmailService) SendReservationVoucherReminder(ctx context.Context, contract *models.Contract) error {
-	if ok, err := s.checkEmailPreconditions(&contract.ApplicantUser, "reservation voucher reminder email"); !ok {
+	if ok, err := s.checkNotificationPreconditions(&contract.ApplicantUser, "reservation voucher reminder email"); !ok {
 		return err
 	}
 
@@ -301,7 +314,7 @@ func (s *EmailService) SendReservationVoucherReminder(ctx context.Context, contr
 }
 
 func (s *EmailService) SendContractApproved(ctx context.Context, contract *models.Contract, monthlyPayment float64, firstPaymentDate string) error {
-	if ok, err := s.checkEmailPreconditions(&contract.ApplicantUser, "contract approved email"); !ok {
+	if ok, err := s.checkNotificationPreconditions(&contract.ApplicantUser, "contract approved email"); !ok {
 		return err
 	}
 
@@ -370,7 +383,7 @@ func (s *EmailService) SendContractApproved(ctx context.Context, contract *model
 
 // SendContractRejected sends an email to the contract owner with the rejection reason.
 func (s *EmailService) SendContractRejected(ctx context.Context, contract *models.Contract, reason string) error {
-	if ok, err := s.checkEmailPreconditions(&contract.ApplicantUser, "contract rejected email"); !ok {
+	if ok, err := s.checkNotificationPreconditions(&contract.ApplicantUser, "contract rejected email"); !ok {
 		return err
 	}
 
@@ -422,7 +435,7 @@ func (s *EmailService) SendContractRejected(ctx context.Context, contract *model
 }
 
 func (s *EmailService) SendPaymentApproved(ctx context.Context, payment *models.Payment) error {
-	if ok, err := s.checkEmailPreconditions(&payment.Contract.ApplicantUser, "payment approved email"); !ok {
+	if ok, err := s.checkNotificationPreconditions(&payment.Contract.ApplicantUser, "payment approved email"); !ok {
 		return err
 	}
 
@@ -490,7 +503,7 @@ func (s *EmailService) SendPaymentApproved(ctx context.Context, payment *models.
 }
 
 func (s *EmailService) SendPaymentRejected(ctx context.Context, contract *models.Contract, amount float64, dueDate string, reason string) error {
-	if ok, err := s.checkEmailPreconditions(&contract.ApplicantUser, "payment rejected email"); !ok {
+	if ok, err := s.checkNotificationPreconditions(&contract.ApplicantUser, "payment rejected email"); !ok {
 		return err
 	}
 
@@ -540,7 +553,7 @@ type OverduePaymentData struct {
 }
 
 func (s *EmailService) SendOverduePayments(ctx context.Context, user *models.User, payments []models.Payment) error {
-	if ok, err := s.checkEmailPreconditions(user, "overdue payments email"); !ok {
+	if ok, err := s.checkNotificationPreconditions(user, "overdue payments email"); !ok {
 		return err
 	}
 
@@ -587,7 +600,7 @@ func (s *EmailService) SendOverduePayments(ctx context.Context, user *models.Use
 
 // SendUpcomingPayments sends a "payment due tomorrow" reminder to the user.
 func (s *EmailService) SendUpcomingPayments(ctx context.Context, user *models.User, payments []models.Payment) error {
-	if ok, err := s.checkEmailPreconditions(user, "upcoming payment email"); !ok {
+	if ok, err := s.checkNotificationPreconditions(user, "upcoming payment email"); !ok {
 		return err
 	}
 
@@ -637,7 +650,7 @@ func (s *EmailService) SendUpcomingPayments(ctx context.Context, user *models.Us
 }
 
 func (s *EmailService) SendReservationApproved(ctx context.Context, contract *models.Contract) error {
-	if ok, err := s.checkEmailPreconditions(&contract.ApplicantUser, "reservation approved email"); !ok {
+	if ok, err := s.checkNotificationPreconditions(&contract.ApplicantUser, "reservation approved email"); !ok {
 		return err
 	}
 

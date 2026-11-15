@@ -5913,7 +5913,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Update user details (admin: any field; owner: full_name, phone, address, locale, identity, rtn only)",
+                "description": "Update user details (admin: any field; owner: full_name, phone, address, locale, identity, rtn, email_notifications only)",
                 "consumes": [
                     "application/json"
                 ],
@@ -8298,6 +8298,9 @@ const docTemplate = `{
                 "email": {
                     "type": "string"
                 },
+                "email_notifications": {
+                    "type": "boolean"
+                },
                 "full_name": {
                     "type": "string"
                 },
@@ -8387,6 +8390,9 @@ const docTemplate = `{
                 },
                 "email": {
                     "type": "string"
+                },
+                "email_notifications": {
+                    "type": "boolean"
                 },
                 "full_name": {
                     "type": "string"

@@ -32,6 +32,7 @@ type User struct {
 	Note                *string    `json:"note"`
 	CreditScore         int        `gorm:"default:0" json:"credit_score"`
 	Locale              string     `gorm:"default:es" json:"locale"`
+	EmailNotifications  bool       `gorm:"column:email_notifications;not null;default:true" json:"email_notifications"`
 	MustChangePassword  bool       `gorm:"column:must_change_password;default:false" json:"must_change_password"`
 	ProfilePicture      *string    `json:"profile_picture"`
 	ProfilePictureThumb *string    `gorm:"column:profile_picture_thumb" json:"profile_picture_thumb"`
@@ -212,6 +213,7 @@ type UserResponse struct {
 	Address                *string    `json:"address"`
 	CreditScore            int        `json:"credit_score"`
 	Locale                 string     `json:"locale"`
+	EmailNotifications     bool       `json:"email_notifications"`
 	MustChangePassword     bool       `json:"must_change_password"`
 	ProfilePicture         *string    `json:"profile_picture"`
 	ProfilePictureThumb    *string    `json:"profile_picture_thumb"`
@@ -246,6 +248,7 @@ func (u *User) ToResponse() UserResponse {
 		Address:                u.Address,
 		CreditScore:            u.CreditScore,
 		Locale:                 u.Locale,
+		EmailNotifications:     u.EmailNotifications,
 		MustChangePassword:     u.MustChangePassword,
 		ProfilePicture:         u.ProfilePicture,
 		ProfilePictureThumb:    u.ProfilePictureThumb,

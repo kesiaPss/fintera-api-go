@@ -64,6 +64,62 @@ func TestEmailService_checkEmailPreconditions(t *testing.T) {
 	assert.Equal(t, "email address is empty", err.Error())
 }
 
+func TestEmailService_checkNotificationPreconditions(t *testing.T) {
+	logger.Setup("test")
+
+	t.Run("user opted out skips without error", func(t *testing.T) {
+		service := NewEmailService(&config.Config{
+			EnableEmailNotifications: true,
+			ResendAPIKey:             "test_key",
+			FromEmail:                "from@example.com",
+		})
+		user := &models.User{ID: 1, Email: "test@example.com", FullName: "Opted Out", EmailNotifications: false}
+
+		ok, err := service.checkNotificationPreconditions(user, "test operation")
+		assert.False(t, ok, "Should return false when the user opted out")
+		assert.NoError(t, err, "Opting out is not an error")
+	})
+
+	t.Run("globally disabled still returns false without error", func(t *testing.T) {
+		service := NewEmailService(&config.Config{EnableEmailNotifications: false})
+		user := &models.User{ID: 2, Email: "test@example.com", EmailNotifications: true}
+
+		ok, err := service.checkNotificationPreconditions(user, "test operation")
+		assert.False(t, ok)
+		assert.NoError(t, err)
+	})
+
+	t.Run("opted in delegates to checkEmailPreconditions", func(t *testing.T) {
+		service := NewEmailService(&config.Config{
+			EnableEmailNotifications: true,
+			ResendAPIKey:             "test_key",
+			FromEmail:                "from@example.com",
+		})
+		user := &models.User{ID: 3, Email: "test@example.com", FullName: "Opted In", EmailNotifications: true}
+
+		ok, err := service.checkNotificationPreconditions(user, "test operation")
+		expectedOk, expectedErr := service.checkEmailPreconditions(user, "test operation")
+		assert.Equal(t, expectedOk, ok)
+		assert.Equal(t, expectedErr, err)
+		assert.True(t, ok)
+		assert.NoError(t, err)
+	})
+
+	t.Run("opted in surfaces configuration errors", func(t *testing.T) {
+		service := NewEmailService(&config.Config{
+			EnableEmailNotifications: true,
+			ResendAPIKey:             "",
+			FromEmail:                "from@example.com",
+		})
+		user := &models.User{ID: 4, Email: "test@example.com", EmailNotifications: true}
+
+		ok, err := service.checkNotificationPreconditions(user, "test operation")
+		assert.False(t, ok)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "RESEND_API_KEY is not set")
+	})
+}
+
 func TestApplyRecipientOverride(t *testing.T) {
 	params := &resend.SendEmailRequest{
 		To:      []string{"customer@example.com"},
