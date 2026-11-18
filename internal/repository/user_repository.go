@@ -19,6 +19,9 @@ type UserRepository interface {
 	FindByIdentity(ctx context.Context, identity string) (*models.User, error)
 	Create(ctx context.Context, user *models.User) error
 	Update(ctx context.Context, user *models.User) error
+	// UpdateCreditScore writes only credit_score and updated_at, leaving all
+	// other user columns untouched.
+	UpdateCreditScore(ctx context.Context, userID uint, score int) error
 	SetRecoveryCode(ctx context.Context, userID uint, code string, sentAt time.Time) error
 	Delete(ctx context.Context, id uint) error
 	SoftDelete(ctx context.Context, id uint) error
@@ -161,6 +164,25 @@ func isDuplicateKeyError(err error, constraintName string) bool {
 
 func (r *userRepository) Update(ctx context.Context, user *models.User) error {
 	return r.db.WithContext(ctx).Save(user).Error
+}
+
+// UpdateCreditScore updates only the credit score and timestamp so background
+// recalculation cannot overwrite unrelated user fields.
+func (r *userRepository) UpdateCreditScore(ctx context.Context, userID uint, score int) error {
+	result := r.db.WithContext(ctx).
+		Model(&models.User{}).
+		Where("id = ?", userID).
+		Updates(map[string]interface{}{
+			"credit_score": score,
+			"updated_at":   time.Now(),
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }
 
 func (r *userRepository) SetRecoveryCode(ctx context.Context, userID uint, code string, sentAt time.Time) error {

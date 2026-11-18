@@ -131,3 +131,31 @@ func TestUserRepository_List_Sorting(t *testing.T) {
 		})
 	}
 }
+
+func TestUserRepository_UpdateCreditScoreWritesOnlyScoreAndTimestamp(t *testing.T) {
+	db, mock := setupMockDB(t)
+	repo := NewUserRepository(db)
+
+	mock.ExpectExec(`UPDATE "users" SET "credit_score"=\$1,"updated_at"=\$2 WHERE id = \$3`).
+		WithArgs(720, sqlmock.AnyArg(), uint(9)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	err := repo.UpdateCreditScore(context.Background(), 9, 720)
+
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestUserRepository_UpdateCreditScoreMissingUser(t *testing.T) {
+	db, mock := setupMockDB(t)
+	repo := NewUserRepository(db)
+
+	mock.ExpectExec(`UPDATE "users" SET "credit_score"=\$1,"updated_at"=\$2 WHERE id = \$3`).
+		WithArgs(720, sqlmock.AnyArg(), uint(9)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	err := repo.UpdateCreditScore(context.Background(), 9, 720)
+
+	assert.ErrorIs(t, err, gorm.ErrRecordNotFound)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}

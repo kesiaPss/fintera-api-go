@@ -554,8 +554,12 @@ type PaymentRepository interface {
 	UpdateStatusByContract(ctx context.Context, contractID uint, fromStatuses []string, toStatus string) error
 	List(ctx context.Context, query *ListQuery) ([]models.Payment, int64, error)
 	FindOverdue(ctx context.Context) ([]models.Payment, error)
-	FindOverdueForActiveContracts(ctx context.Context) ([]models.Payment, error)
-	FindPaymentsDueTomorrowForActiveContracts(ctx context.Context) ([]models.Payment, error)
+	// FindOverdueReminders returns overdue payments with their contract,
+	// applicant user, lot, and project in a single joined query.
+	FindOverdueReminders(ctx context.Context) ([]models.Payment, error)
+	// FindUpcomingReminders returns payments due tomorrow with their contract,
+	// applicant user, lot, and project in a single joined query.
+	FindUpcomingReminders(ctx context.Context) ([]models.Payment, error)
 	MarkOverdueReminderSent(ctx context.Context, paymentIDs []uint) error
 	MarkUpcomingReminderSent(ctx context.Context, paymentIDs []uint) error
 	FindPendingByUser(ctx context.Context, userID uint) ([]models.Payment, error)
@@ -764,32 +768,105 @@ func (r *paymentRepository) FindOverdue(ctx context.Context) ([]models.Payment, 
 	return payments, err
 }
 
-// FindOverdueForActiveContracts returns overdue payments only for active contracts (approved, active=true)
-// and active users (status=active, not discarded). Excludes payments that had a reminder sent in the last 7 days
-// to avoid spamming. Preloads Contract.Lot.Project, Contract.Lot and Contract.ApplicantUser for email templates.
-func (r *paymentRepository) FindOverdueForActiveContracts(ctx context.Context) ([]models.Payment, error) {
-	var payments []models.Payment
-	err := r.db.WithContext(ctx).
+// reminderRow is the flat projection shared by the daily reminder queries. It
+// lets one joined query hydrate the payment plus its contract, applicant user,
+// lot, and project without GORM preload round trips.
+type reminderRow struct {
+	PaymentID              uint       `gorm:"column:payment_id"`
+	ContractID             uint       `gorm:"column:contract_id"`
+	Amount                 float64    `gorm:"column:amount"`
+	DueDate                time.Time  `gorm:"column:due_date"`
+	PaymentStatus          string     `gorm:"column:payment_status"`
+	OverdueReminderSentAt  *time.Time `gorm:"column:overdue_reminder_sent_at"`
+	UpcomingReminderSentAt *time.Time `gorm:"column:upcoming_reminder_sent_at"`
+
+	ApplicantUserID uint   `gorm:"column:applicant_user_id"`
+	LotID           uint   `gorm:"column:lot_id"`
+	UserID          uint   `gorm:"column:user_id"`
+	UserFullName    string `gorm:"column:user_full_name"`
+	UserEmail       string `gorm:"column:user_email"`
+	LotName         string `gorm:"column:lot_name"`
+	ProjectID       uint   `gorm:"column:project_id"`
+	ProjectName     string `gorm:"column:project_name"`
+}
+
+func (row reminderRow) payment() models.Payment {
+	return models.Payment{
+		ID:                     row.PaymentID,
+		ContractID:             row.ContractID,
+		Amount:                 row.Amount,
+		DueDate:                row.DueDate,
+		Status:                 row.PaymentStatus,
+		OverdueReminderSentAt:  row.OverdueReminderSentAt,
+		UpcomingReminderSentAt: row.UpcomingReminderSentAt,
+		Contract: models.Contract{
+			ID:              row.ContractID,
+			ApplicantUserID: row.ApplicantUserID,
+			LotID:           row.LotID,
+			Lot: models.Lot{
+				ID:        row.LotID,
+				Name:      row.LotName,
+				ProjectID: row.ProjectID,
+				Project: models.Project{
+					ID:   row.ProjectID,
+					Name: row.ProjectName,
+				},
+			},
+			ApplicantUser: models.User{
+				ID:       row.UserID,
+				FullName: row.UserFullName,
+				Email:    row.UserEmail,
+			},
+		},
+	}
+}
+
+func reminderRowsToPayments(rows []reminderRow) []models.Payment {
+	payments := make([]models.Payment, 0, len(rows))
+	for _, row := range rows {
+		payments = append(payments, row.payment())
+	}
+	return payments
+}
+
+// reminderQuery joins every table the reminder emails need so the jobs stay at
+// one round trip regardless of how many payments are overdue or due tomorrow.
+func (r *paymentRepository) reminderQuery(ctx context.Context) *gorm.DB {
+	return r.db.WithContext(ctx).
+		Table("payments").
+		Select("payments.id AS payment_id, payments.contract_id AS contract_id, payments.amount AS amount, payments.due_date AS due_date, payments.status AS payment_status, payments.overdue_reminder_sent_at AS overdue_reminder_sent_at, payments.upcoming_reminder_sent_at AS upcoming_reminder_sent_at, contracts.applicant_user_id AS applicant_user_id, contracts.lot_id AS lot_id, users.id AS user_id, users.full_name AS user_full_name, users.email AS user_email, lots.name AS lot_name, lots.project_id AS project_id, projects.name AS project_name").
 		Joins("JOIN contracts ON contracts.id = payments.contract_id AND contracts.status = ? AND contracts.active = ?",
 			models.ContractStatusApproved, true).
 		Joins("JOIN users ON users.id = contracts.applicant_user_id AND users.status = ? AND users.discarded_at IS NULL",
 			models.StatusActive).
+		Joins("JOIN lots ON lots.id = contracts.lot_id").
+		Joins("JOIN projects ON projects.id = lots.project_id")
+}
+
+// FindOverdueReminders returns overdue payments only for active contracts
+// (approved, active=true) and active users (status=active, not discarded).
+// Payments that already received a reminder in the last 7 days are excluded to
+// avoid spamming.
+func (r *paymentRepository) FindOverdueReminders(ctx context.Context) ([]models.Payment, error) {
+	var rows []reminderRow
+	err := r.reminderQuery(ctx).
 		Where("payments.status = ? AND payments.due_date < CURRENT_DATE", models.PaymentStatusPending).
 		Where("(payments.overdue_reminder_sent_at IS NULL OR payments.overdue_reminder_sent_at < CURRENT_TIMESTAMP - INTERVAL '7 days')").
-		Preload("Contract.Lot.Project").
-		Preload("Contract.ApplicantUser").
 		Order("payments.due_date ASC").
-		Find(&payments).Error
-	return payments, err
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	return reminderRowsToPayments(rows), nil
 }
 
 // FindOverdueForActiveContractsDetailed returns every overdue payment of an
 // active (approved or signed, not cancelled) contract. Unlike
-// FindOverdueForActiveContracts it does not skip payments that already
-// received a reminder, because the report must list every overdue row.
-// Contract is preloaded with its cached Balance, the applicant user and the
-// lot's project, which the overdue export needs for fiscal and grouping
-// columns. Payment.PaymentType is a column of the payment row itself.
+// FindOverdueReminders it does not skip payments that already received a
+// reminder, because the report must list every overdue row. Contract is
+// preloaded with its cached Balance, the applicant user and the lot's project,
+// which the overdue export needs for fiscal and grouping columns.
+// Payment.PaymentType is a column of the payment row itself.
 func (r *paymentRepository) FindOverdueForActiveContractsDetailed(ctx context.Context) ([]models.Payment, error) {
 	var payments []models.Payment
 	err := r.db.WithContext(ctx).
@@ -804,21 +881,19 @@ func (r *paymentRepository) FindOverdueForActiveContractsDetailed(ctx context.Co
 	return payments, err
 }
 
-// FindPaymentsDueTomorrowForActiveContracts returns pending payments with due_date = tomorrow.
-func (r *paymentRepository) FindPaymentsDueTomorrowForActiveContracts(ctx context.Context) ([]models.Payment, error) {
-	var payments []models.Payment
-	err := r.db.WithContext(ctx).
-		Joins("JOIN contracts ON contracts.id = payments.contract_id AND contracts.status = ? AND contracts.active = ?",
-			models.ContractStatusApproved, true).
-		Joins("JOIN users ON users.id = contracts.applicant_user_id AND users.status = ? AND users.discarded_at IS NULL",
-			models.StatusActive).
+// FindUpcomingReminders returns pending payments due tomorrow for active
+// contracts and users that have not received an upcoming reminder yet.
+func (r *paymentRepository) FindUpcomingReminders(ctx context.Context) ([]models.Payment, error) {
+	var rows []reminderRow
+	err := r.reminderQuery(ctx).
 		Where("payments.status = ? AND payments.due_date = CURRENT_DATE + INTERVAL '1 day'", models.PaymentStatusPending).
 		Where("payments.upcoming_reminder_sent_at IS NULL").
-		Preload("Contract.Lot").
-		Preload("Contract.ApplicantUser").
 		Order("payments.due_date ASC").
-		Find(&payments).Error
-	return payments, err
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	return reminderRowsToPayments(rows), nil
 }
 
 // MarkOverdueReminderSent sets overdue_reminder_sent_at to now for the given payment IDs.

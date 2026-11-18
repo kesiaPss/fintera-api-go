@@ -121,10 +121,10 @@ func (m *mockPaymentRepositoryWithOverdue) UpdateStatusByContract(ctx context.Co
 func (m *mockPaymentRepositoryWithOverdue) List(ctx context.Context, query *repository.ListQuery) ([]models.Payment, int64, error) {
 	return nil, 0, nil
 }
-func (m *mockPaymentRepositoryWithOverdue) FindOverdueForActiveContracts(ctx context.Context) ([]models.Payment, error) {
+func (m *mockPaymentRepositoryWithOverdue) FindOverdueReminders(ctx context.Context) ([]models.Payment, error) {
 	return nil, nil
 }
-func (m *mockPaymentRepositoryWithOverdue) FindPaymentsDueTomorrowForActiveContracts(ctx context.Context) ([]models.Payment, error) {
+func (m *mockPaymentRepositoryWithOverdue) FindUpcomingReminders(ctx context.Context) ([]models.Payment, error) {
 	return nil, nil
 }
 func (m *mockPaymentRepositoryWithOverdue) MarkOverdueReminderSent(ctx context.Context, paymentIDs []uint) error {

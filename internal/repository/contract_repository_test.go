@@ -156,33 +156,60 @@ func TestPaymentRepository_FindOverdue(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestPaymentRepository_FindOverdueForActiveContracts(t *testing.T) {
+func TestPaymentRepository_FindOverdueRemindersUsesSingleJoinedQuery(t *testing.T) {
 	db, mock := setupMockDB(t)
 	repo := NewPaymentRepository(db)
 
-	mock.ExpectQuery(`JOIN contracts ON contracts\.id = payments\.contract_id AND contracts\.status = \$1 AND contracts\.active = \$2`).
+	due := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	mock.ExpectQuery(`SELECT payments\.id AS payment_id.*JOIN contracts ON contracts\.id = payments\.contract_id.*JOIN users ON users\.id = contracts\.applicant_user_id.*JOIN lots ON lots\.id = contracts\.lot_id JOIN projects ON projects\.id = lots\.project_id WHERE \(payments\.status = \$4 AND payments\.due_date < CURRENT_DATE\)`).
 		WithArgs(models.ContractStatusApproved, true, models.StatusActive, models.PaymentStatusPending).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "status"}))
+		WillReturnRows(sqlmock.NewRows([]string{
+			"payment_id", "contract_id", "amount", "due_date", "payment_status",
+			"overdue_reminder_sent_at", "upcoming_reminder_sent_at",
+			"applicant_user_id", "lot_id", "user_id", "user_full_name", "user_email",
+			"lot_name", "project_id", "project_name",
+		}).AddRow(501, 40, 1250.75, due, models.PaymentStatusPending, nil, nil,
+			7, 12, 7, "Ana Diaz", "ana@example.com", "Lote 12", 3, "Altos de la Sierra"))
 
-	payments, err := repo.FindOverdueForActiveContracts(context.Background())
+	payments, err := repo.FindOverdueReminders(context.Background())
 
 	require.NoError(t, err)
-	assert.Empty(t, payments)
+	require.Len(t, payments, 1)
+	payment := payments[0]
+	assert.Equal(t, uint(501), payment.ID)
+	assert.Equal(t, uint(40), payment.ContractID)
+	assert.InDelta(t, 1250.75, payment.Amount, 0.001)
+	assert.Equal(t, due, payment.DueDate)
+	assert.Equal(t, uint(7), payment.Contract.ApplicantUserID)
+	assert.Equal(t, "Lote 12", payment.Contract.Lot.Name)
+	assert.Equal(t, "Altos de la Sierra", payment.Contract.Lot.Project.Name)
+	assert.Equal(t, "ana@example.com", payment.Contract.ApplicantUser.Email)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestPaymentRepository_FindPaymentsDueTomorrowForActiveContracts(t *testing.T) {
+func TestPaymentRepository_FindUpcomingRemindersUsesSingleJoinedQuery(t *testing.T) {
 	db, mock := setupMockDB(t)
 	repo := NewPaymentRepository(db)
 
-	mock.ExpectQuery(`JOIN contracts ON contracts\.id = payments\.contract_id AND contracts\.status = \$1 AND contracts\.active = \$2`).
+	due := time.Date(2026, 11, 19, 0, 0, 0, 0, time.UTC)
+	mock.ExpectQuery(`SELECT payments\.id AS payment_id.*JOIN lots ON lots\.id = contracts\.lot_id JOIN projects ON projects\.id = lots\.project_id WHERE \(payments\.status = \$4 AND payments\.due_date = CURRENT_DATE \+ INTERVAL '1 day'\)`).
 		WithArgs(models.ContractStatusApproved, true, models.StatusActive, models.PaymentStatusPending).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "status"}))
+		WillReturnRows(sqlmock.NewRows([]string{
+			"payment_id", "contract_id", "amount", "due_date", "payment_status",
+			"overdue_reminder_sent_at", "upcoming_reminder_sent_at",
+			"applicant_user_id", "lot_id", "user_id", "user_full_name", "user_email",
+			"lot_name", "project_id", "project_name",
+		}).AddRow(502, 41, 800, due, models.PaymentStatusPending, nil, nil,
+			8, 13, 8, "Luis Paz", "luis@example.com", "Lote 13", 3, "Altos de la Sierra"))
 
-	payments, err := repo.FindPaymentsDueTomorrowForActiveContracts(context.Background())
+	payments, err := repo.FindUpcomingReminders(context.Background())
 
 	require.NoError(t, err)
-	assert.Empty(t, payments)
+	require.Len(t, payments, 1)
+	payment := payments[0]
+	assert.Equal(t, uint(502), payment.ID)
+	assert.Equal(t, "Lote 13", payment.Contract.Lot.Name)
+	assert.Equal(t, "Luis Paz", payment.Contract.ApplicantUser.FullName)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
