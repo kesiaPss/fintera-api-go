@@ -35,6 +35,40 @@ func ParseListQuery(c *gin.Context) *repository.ListQuery {
 	return query
 }
 
+const (
+	defaultNotificationLimit = 20
+	maxNotificationLimit     = 50
+)
+
+// parseNotificationLimit returns the requested notification page size,
+// defaulting to 20 and clamping anything outside 1..50.
+func parseNotificationLimit(c *gin.Context) int {
+	limit, err := strconv.Atoi(c.Query("limit"))
+	if err != nil || limit < 1 {
+		return defaultNotificationLimit
+	}
+	if limit > maxNotificationLimit {
+		return maxNotificationLimit
+	}
+	return limit
+}
+
+// parseNotificationCursor reads the `cursor` query parameter. A missing value
+// means the first page; ok is false when the value is not a valid unsigned
+// integer.
+func parseNotificationCursor(c *gin.Context) (uint, bool) {
+	raw := c.Query("cursor")
+	if raw == "" {
+		return 0, true
+	}
+
+	cursor, err := strconv.ParseUint(raw, 10, 32)
+	if err != nil {
+		return 0, false
+	}
+	return uint(cursor), true
+}
+
 const maxCommissionPerPage = 20
 
 // parseCommissionPage reads a 1-based page and a page size from the query. The

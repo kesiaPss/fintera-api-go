@@ -472,35 +472,19 @@ func NewNotificationHandler(notificationService *services.NotificationService) *
 }
 
 // @Summary List Notifications
-// @Description Get a paginated list of notifications for the current user. Filter by status=unread or status=read.
+// @Description Get a cursor-paginated list of notifications for the current user. Filter by status=unread or status=read.
 // @Tags Notifications
 // @Accept json
 // @Produce json
-// @Param page query int false "Page number" default(1)
-// @Param per_page query int false "Items per page" default(20)
+// @Param cursor query int false "Return notifications older than this notification ID"
+// @Param limit query int false "Items per page" default(20)
 // @Param status query string false "Filter by status: unread, read"
 // @Success 200 {object} map[string]interface{}
 // @Security BearerAuth
 // @Router /notifications [get]
 func (h *NotificationHandler) Index(c *gin.Context) {
 	userID := middleware.GetUserID(c)
-	query := ParseListQuery(c)
-	if status := c.Query("status"); status != "" {
-		query.Filters["status"] = status
-	}
-
-	notifications, total, err := h.notificationService.FindByUser(c.Request.Context(), userID, query)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	var responses []interface{}
-	for _, n := range notifications {
-		responses = append(responses, n.ToResponse())
-	}
-
-	c.JSON(http.StatusOK, gin.H{"notifications": responses, "pagination": gin.H{"total": total}})
+	h.respondWithNotifications(c, userID)
 }
 
 // IndexByUser lists notifications for the user in the URL. Access is already
@@ -512,23 +496,40 @@ func (h *NotificationHandler) IndexByUser(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "ID de usuario inválido"})
 		return
 	}
-	query := ParseListQuery(c)
-	if status := c.Query("status"); status != "" {
-		query.Filters["status"] = status
+	h.respondWithNotifications(c, uint(userID))
+}
+
+func (h *NotificationHandler) respondWithNotifications(c *gin.Context, userID uint) {
+	cursorID, ok := parseNotificationCursor(c)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "cursor inválido"})
+		return
 	}
 
-	notifications, total, err := h.notificationService.FindByUser(c.Request.Context(), uint(userID), query)
+	page, err := h.notificationService.FindByUserPage(
+		c.Request.Context(),
+		userID,
+		c.Query("status"),
+		cursorID,
+		parseNotificationLimit(c),
+	)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	var responses []interface{}
-	for _, n := range notifications {
+	responses := make([]models.NotificationResponse, 0, len(page.Notifications))
+	for _, n := range page.Notifications {
 		responses = append(responses, n.ToResponse())
 	}
 
-	c.JSON(http.StatusOK, gin.H{"notifications": responses, "pagination": gin.H{"total": total}})
+	c.JSON(http.StatusOK, gin.H{
+		"notifications": responses,
+		"next_cursor":   page.NextCursor,
+		"has_more":      page.HasMore,
+		"unread_count":  page.UnreadCount,
+		"pagination":    gin.H{"total": page.Total},
+	})
 }
 
 // @Summary Get Notification

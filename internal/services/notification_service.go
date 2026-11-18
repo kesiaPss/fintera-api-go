@@ -20,8 +20,45 @@ func (s *NotificationService) FindByID(ctx context.Context, id uint) (*models.No
 	return s.repo.FindByID(ctx, id)
 }
 
-func (s *NotificationService) FindByUser(ctx context.Context, userID uint, query *repository.ListQuery) ([]models.Notification, int64, error) {
-	return s.repo.FindByUser(ctx, userID, query)
+// NotificationPage is one cursor page of a user's notifications.
+type NotificationPage struct {
+	Notifications []models.Notification
+	Total         int64
+	UnreadCount   int64
+	NextCursor    *uint
+	HasMore       bool
+}
+
+// FindByUserPage loads up to limit notifications newer-to-older starting after
+// cursorID (0 starts at the newest) and reports whether older rows remain.
+func (s *NotificationService) FindByUserPage(ctx context.Context, userID uint, status string, cursorID uint, limit int) (*NotificationPage, error) {
+	rows, total, err := s.repo.FindByUserPage(ctx, userID, status, cursorID, limit+1)
+	if err != nil {
+		return nil, err
+	}
+
+	hasMore := len(rows) > limit
+	if hasMore {
+		rows = rows[:limit]
+	}
+
+	unread, err := s.repo.CountUnread(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	page := &NotificationPage{
+		Notifications: rows,
+		Total:         total,
+		UnreadCount:   unread,
+		HasMore:       hasMore,
+	}
+	if hasMore && len(rows) > 0 {
+		cursor := rows[len(rows)-1].ID
+		page.NextCursor = &cursor
+	}
+
+	return page, nil
 }
 
 func (s *NotificationService) Create(ctx context.Context, notification *models.Notification) error {
