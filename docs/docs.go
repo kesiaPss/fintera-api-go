@@ -1998,7 +1998,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Get a paginated list of notifications for the current user. Filter by status=unread or status=read.",
+                "description": "Get a cursor-paginated list of notifications for the current user. Filter by status=unread or status=read.",
                 "consumes": [
                     "application/json"
                 ],
@@ -2012,16 +2012,15 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "integer",
-                        "default": 1,
-                        "description": "Page number",
-                        "name": "page",
+                        "description": "Return notifications older than this notification ID",
+                        "name": "cursor",
                         "in": "query"
                     },
                     {
                         "type": "integer",
                         "default": 20,
                         "description": "Items per page",
-                        "name": "per_page",
+                        "name": "limit",
                         "in": "query"
                     },
                     {

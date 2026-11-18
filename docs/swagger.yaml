@@ -2632,18 +2632,17 @@ paths:
     get:
       consumes:
       - application/json
-      description: Get a paginated list of notifications for the current user. Filter
-        by status=unread or status=read.
+      description: Get a cursor-paginated list of notifications for the current user.
+        Filter by status=unread or status=read.
       parameters:
-      - default: 1
-        description: Page number
+      - description: Return notifications older than this notification ID
         in: query
-        name: page
+        name: cursor
         type: integer
       - default: 20
         description: Items per page
         in: query
-        name: per_page
+        name: limit
         type: integer
       - description: 'Filter by status: unread, read'
         in: query

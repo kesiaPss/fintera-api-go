@@ -1393,7 +1393,11 @@ func (r *lotRepository) List(ctx context.Context, projectID uint, query *ListQue
 // NotificationRepository defines the interface for notification data access
 type NotificationRepository interface {
 	FindByID(ctx context.Context, id uint) (*models.Notification, error)
-	FindByUser(ctx context.Context, userID uint, query *ListQuery) ([]models.Notification, int64, error)
+	// FindByUserPage returns one cursor page of notifications for a user,
+	// newest first. cursorID selects rows older than that notification ID;
+	// zero starts at the newest notification. The returned total counts every
+	// notification matching the status filter, ignoring the cursor.
+	FindByUserPage(ctx context.Context, userID uint, status string, cursorID uint, limit int) ([]models.Notification, int64, error)
 	Create(ctx context.Context, notification *models.Notification) error
 	Update(ctx context.Context, notification *models.Notification) error
 	Delete(ctx context.Context, id uint) error
@@ -1418,29 +1422,35 @@ func (r *notificationRepository) FindByID(ctx context.Context, id uint) (*models
 	return &notification, nil
 }
 
-func (r *notificationRepository) FindByUser(ctx context.Context, userID uint, query *ListQuery) ([]models.Notification, int64, error) {
-	var notifications []models.Notification
-	var total int64
-
+func (r *notificationRepository) notificationScope(ctx context.Context, userID uint, status string) *gorm.DB {
 	db := r.db.WithContext(ctx).Model(&models.Notification{}).Where("user_id = ?", userID)
 
-	if status, ok := query.Filters["status"]; ok && status != "" {
-		switch strings.ToLower(status) {
-		case "unread":
-			db = db.Where("read_at IS NULL")
-		case "read":
-			db = db.Where("read_at IS NOT NULL")
-		}
+	switch strings.ToLower(status) {
+	case "unread":
+		db = db.Where("read_at IS NULL")
+	case "read":
+		db = db.Where("read_at IS NOT NULL")
 	}
 
-	db.Count(&total)
-	db = db.Order("created_at DESC")
+	return db
+}
 
-	if query.PerPage > 0 {
-		db = db.Offset((query.Page - 1) * query.PerPage).Limit(query.PerPage)
+func (r *notificationRepository) FindByUserPage(ctx context.Context, userID uint, status string, cursorID uint, limit int) ([]models.Notification, int64, error) {
+	var total int64
+	if err := r.notificationScope(ctx, userID, status).Count(&total).Error; err != nil {
+		return nil, 0, err
 	}
 
-	err := db.Find(&notifications).Error
+	db := r.notificationScope(ctx, userID, status)
+	if cursorID > 0 {
+		db = db.Where("id < ?", cursorID)
+	}
+	if limit > 0 {
+		db = db.Limit(limit)
+	}
+
+	var notifications []models.Notification
+	err := db.Order("id DESC").Find(&notifications).Error
 	return notifications, total, err
 }
 
