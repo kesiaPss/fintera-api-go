@@ -54,6 +54,11 @@ func (m *mockProjectRepo) FindAll(ctx context.Context) ([]models.Project, error)
 	return args.Get(0).([]models.Project), args.Error(1)
 }
 
+func (m *mockProjectRepo) FindAllSummaries(ctx context.Context) ([]models.Project, error) {
+	args := m.Called(ctx)
+	return args.Get(0).([]models.Project), args.Error(1)
+}
+
 func (m *mockProjectRepo) Create(ctx context.Context, project *models.Project) error {
 	args := m.Called(ctx, project)
 	return args.Error(0)

@@ -127,8 +127,10 @@ cmd/api → handlers → services → repository → models
 
 ## Cross-cutting concerns
 
-- **Logging:** `pkg/logger` wraps `log/slog`. Production uses JSON; other
-  environments use text. GORM logging is wired through `pkg/logger/gorm.go`.
+- **Logging:** `pkg/logger` wraps `log/slog`. Deployed environments emit JSON so
+  `level`/`severity` is machine-readable; text output is opt-in with
+  `LOG_FORMAT=text`. GORM logging is wired through `pkg/logger/gorm.go`; cache
+  misses (`gorm.ErrRecordNotFound`) are logged at debug level, not as SQL errors.
 - **Errors:** Handlers usually return `{"error": "<message>"}`. Many
   user-facing messages are Spanish. Service sentinel errors live in
   `internal/services/errors.go`.
@@ -139,6 +141,12 @@ cmd/api → handlers → services → repository → models
   resolve for anonymous tracking visitors.
 - **Observability:** Rollbar captures panics and errors when configured; the
   worker exposes stats through `GET /api/v1/jobs/status` (admin only).
+- **Analytics refresh:** `AnalyticsService.RefreshCache` runs every 15 minutes.
+  It loads project identities once (`FindAllSummaries`) and computes global and
+  per-project metrics from a bounded set of aggregate queries
+  (`GetProjectOverviewMetrics`, `GetProjectLotDistributions`,
+  `GetRevenueTrendByProject`) instead of querying project by project. Cache
+  writes are single `ON CONFLICT` upserts.
 
 ## Design decisions and trade-offs
 

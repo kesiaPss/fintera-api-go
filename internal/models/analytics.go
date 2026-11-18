@@ -79,7 +79,27 @@ type ProjectPerformance struct {
 	ProjectID         string    `json:"project_id"`
 	ProjectName       string    `json:"project_name"`
 	GrowthPercentage  float64   `json:"growth_percentage"`
-	WeeklyPerformance []float64 `json:"weekly_performance"`
+	WeeklyPerformance []float64 `json:"weekly_performance,omitempty"`
+}
+
+// ProjectOverviewMetrics holds the current and previous aggregates for one
+// project in a single refresh pass. Comparison* values are computed over the
+// same window used for the previous period so change percentages stay
+// like-for-like even when the displayed totals are all-time.
+type ProjectOverviewMetrics struct {
+	ProjectID              uint
+	TotalRevenue           float64
+	ActiveContracts        int
+	AveragePayment         float64
+	TotalLots              int
+	OccupiedLots           int
+	PreviousRevenue        float64
+	PreviousContracts      int
+	PreviousAveragePayment float64
+	PreviousOccupiedLots   int
+	ComparisonRevenue      float64
+	ComparisonContracts    int
+	ComparisonAvgPayment   float64
 }
 
 // SellerPerformance represents performance metrics for a seller

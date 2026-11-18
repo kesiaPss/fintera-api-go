@@ -3,12 +3,15 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/sjperalta/fintera-api/internal/models"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type AnalyticsRepository interface {
@@ -26,6 +29,13 @@ type AnalyticsRepository interface {
 	GetLotDistribution(ctx context.Context, projectID *uint) (*models.LotDistribution, error)
 	GetProjectPerformance(ctx context.Context, filters models.AnalyticsFilters) ([]models.ProjectPerformance, error)
 	GetSellerPerformance(ctx context.Context, filters models.AnalyticsFilters) ([]models.SellerPerformance, error)
+
+	// Batched refresh helpers: one aggregate query covers every project so the
+	// scheduled job cost does not grow with the number of projects.
+	GetProjectOverviewMetrics(ctx context.Context, curStart, curEnd, prevStart, prevEnd *time.Time) ([]models.ProjectOverviewMetrics, error)
+	GetProjectLotDistributions(ctx context.Context) (map[uint]*models.LotDistribution, error)
+	GetRevenueTrendByProject(ctx context.Context, timeframe string, year *int) (map[uint][]models.RevenueTrendPoint, error)
+	GetWeeklyPerformanceByProject(ctx context.Context) (map[uint][]float64, error)
 
 	// Report aggregations. Each method accepts optional project, seller and
 	// period filters and returns zero values (never null scan errors) for empty
@@ -77,25 +87,26 @@ func (r *analyticsRepository) SetCache(ctx context.Context, key string, projectI
 		ExpiresAt: time.Now().Add(ttl),
 	}
 
-	// Upsert strategy
-	var existing models.AnalyticsCache
-	db := r.db.WithContext(ctx).Where("cache_key = ?", key)
-	if projectID != nil {
-		db = db.Where("project_id = ?", *projectID)
-	} else {
-		db = db.Where("project_id IS NULL")
-	}
-
-	err = db.First(&existing).Error
-	if err == nil {
-		return r.db.WithContext(ctx).Model(&existing).Updates(map[string]interface{}{
+	// A single upsert keeps concurrent refreshes from inserting duplicates. The
+	// global entry has a NULL project_id, which needs the partial unique index
+	// and an explicit target predicate.
+	conflict := clause.OnConflict{
+		Columns: []clause.Column{{Name: "cache_key"}},
+		DoUpdates: clause.Assignments(map[string]interface{}{
 			"data":       jsonData,
 			"expires_at": cache.ExpiresAt,
 			"updated_at": time.Now(),
-		}).Error
+		}),
+	}
+	if projectID != nil {
+		conflict.Columns = []clause.Column{{Name: "cache_key"}, {Name: "project_id"}}
+	} else {
+		conflict.TargetWhere = clause.Where{Exprs: []clause.Expression{
+			clause.Expr{SQL: "project_id IS NULL"},
+		}}
 	}
 
-	return r.db.WithContext(ctx).Create(&cache).Error
+	return r.db.WithContext(ctx).Clauses(conflict).Create(&cache).Error
 }
 
 func (r *analyticsRepository) InvalidateCache(ctx context.Context, key string, projectID *uint) error {
@@ -222,105 +233,112 @@ func (r *analyticsRepository) GetOccupancyRate(ctx context.Context, projectID *u
 	return (float64(occupied) / float64(total)) * 100, nil
 }
 
-func (r *analyticsRepository) GetRevenueTrend(ctx context.Context, projectID *uint, timeframe string, year *int) ([]models.RevenueTrendPoint, error) {
-	var points []models.RevenueTrendPoint
+// revenueTrendRow is one calendar-month bucket of a trend query.
+type revenueTrendRow struct {
+	Month time.Time
+	Label string
+	Total float64
+}
 
-	var startDate, endDate time.Time
+// trendRange resolves the trend window. A specific year wins; otherwise the
+// window spans the requested timeframe around today so future projections are
+// included.
+func trendRange(timeframe string, year *int) (time.Time, time.Time) {
 	if year != nil {
-		startDate = time.Date(*year, 1, 1, 0, 0, 0, 0, time.UTC)
-		endDate = time.Date(*year, 12, 31, 23, 59, 59, 0, time.UTC)
-	} else {
-		// Default to last 12 months if not specified
-		months := 12
-		if timeframe == "6M" {
-			months = 6
+		return time.Date(*year, 1, 1, 0, 0, 0, 0, time.UTC),
+			time.Date(*year, 12, 31, 23, 59, 59, 0, time.UTC)
+	}
+	months := 12
+	if timeframe == "6M" {
+		months = 6
+	}
+	now := time.Now()
+	return now.AddDate(0, -months, 0), now.AddDate(0, months, 0)
+}
+
+// mergeRevenueTrend combines real and projected rows by calendar month. The
+// month key includes the year, so the same month in different years stays
+// distinct, and the result is sorted chronologically.
+func mergeRevenueTrend(realRows, projectedRows []revenueTrendRow) []models.RevenueTrendPoint {
+	type bucket struct {
+		month time.Time
+		point models.RevenueTrendPoint
+	}
+
+	byMonth := make(map[string]*bucket, len(realRows)+len(projectedRows))
+	add := func(row revenueTrendRow) *bucket {
+		month := monthStart(row.Month)
+		key := monthKey(month)
+		b, ok := byMonth[key]
+		if !ok {
+			label := row.Label
+			if label == "" {
+				label = month.Format("Jan")
+			}
+			b = &bucket{month: month, point: models.RevenueTrendPoint{Label: label}}
+			byMonth[key] = b
 		}
-		// Calculate start date
-		startDate = time.Now().AddDate(0, -months, 0)
-		endDate = time.Now().AddDate(0, months, 0) // Future projections within same timeframe
+		return b
 	}
 
-	// Real revenue (paid payments)
-	var realResults []struct {
-		Label string
-		Total float64
+	for _, row := range realRows {
+		add(row).point.Real += row.Total
+	}
+	for _, row := range projectedRows {
+		add(row).point.Projected += row.Total
 	}
 
-	realQuery := r.db.WithContext(ctx).Table("payments").
-		Select("TO_CHAR(payments.payment_date, 'Mon') as label, SUM(payments.paid_amount) as total, MIN(payments.payment_date) as sort_date").
-		Where("payments.status = ?", models.PaymentStatusPaid).
-		Where("payments.payment_date >= ?", startDate).
-		Where("payments.payment_date <= ?", endDate).
-		Group("TO_CHAR(payments.payment_date, 'Mon')").
-		Order("sort_date ASC")
+	buckets := make([]*bucket, 0, len(byMonth))
+	for _, b := range byMonth {
+		buckets = append(buckets, b)
+	}
+	sort.Slice(buckets, func(i, j int) bool {
+		return buckets[i].month.Before(buckets[j].month)
+	})
+
+	points := make([]models.RevenueTrendPoint, 0, len(buckets))
+	for _, b := range buckets {
+		points = append(points, b.point)
+	}
+	return points
+}
+
+// revenueTrendRows runs one trend aggregate. column and amountColumn are
+// hard-coded by the caller, never user input.
+func (r *analyticsRepository) revenueTrendRows(ctx context.Context, projectID *uint, column, status, amountColumn string, startDate, endDate time.Time) ([]revenueTrendRow, error) {
+	query := r.db.WithContext(ctx).Table("payments").
+		Select("DATE_TRUNC('month', payments."+column+") AS month, TO_CHAR(payments."+column+", 'Mon') AS label, COALESCE(SUM(payments."+amountColumn+"), 0) AS total").
+		Where("payments.status = ?", status).
+		Where("payments."+column+" >= ?", startDate).
+		Where("payments."+column+" <= ?", endDate).
+		Group("DATE_TRUNC('month', payments." + column + "), TO_CHAR(payments." + column + ", 'Mon')").
+		Order("month ASC")
 
 	if projectID != nil {
-		realQuery = realQuery.Joins("JOIN contracts ON contracts.id = payments.contract_id").
+		query = query.Joins("JOIN contracts ON contracts.id = payments.contract_id").
 			Joins("JOIN lots ON lots.id = contracts.lot_id").
 			Where("lots.project_id = ?", *projectID)
 	}
 
-	err := realQuery.Scan(&realResults).Error
+	var rows []revenueTrendRow
+	err := query.Scan(&rows).Error
+	return rows, err
+}
+
+func (r *analyticsRepository) GetRevenueTrend(ctx context.Context, projectID *uint, timeframe string, year *int) ([]models.RevenueTrendPoint, error) {
+	startDate, endDate := trendRange(timeframe, year)
+
+	realRows, err := r.revenueTrendRows(ctx, projectID, "payment_date", models.PaymentStatusPaid, "paid_amount", startDate, endDate)
 	if err != nil {
 		return nil, err
 	}
 
-	// Projected revenue (pending payments for future months)
-	var projectedResults []struct {
-		Label string
-		Total float64
-	}
-
-	projectedQuery := r.db.WithContext(ctx).Table("payments").
-		Select("TO_CHAR(payments.due_date, 'Mon') as label, SUM(payments.amount) as total, MIN(payments.due_date) as sort_date").
-		Where("payments.status = ?", models.PaymentStatusPending).
-		Where("payments.due_date >= ?", startDate).
-		Where("payments.due_date <= ?", endDate).
-		Group("TO_CHAR(payments.due_date, 'Mon')").
-		Order("sort_date ASC")
-
-	if projectID != nil {
-		projectedQuery = projectedQuery.Joins("JOIN contracts ON contracts.id = payments.contract_id").
-			Joins("JOIN lots ON lots.id = contracts.lot_id").
-			Where("lots.project_id = ?", *projectID)
-	}
-
-	err = projectedQuery.Scan(&projectedResults).Error
+	projectedRows, err := r.revenueTrendRows(ctx, projectID, "due_date", models.PaymentStatusPending, "amount", startDate, endDate)
 	if err != nil {
 		return nil, err
 	}
 
-	// Merge results
-	labelMap := make(map[string]*models.RevenueTrendPoint)
-
-	for _, res := range realResults {
-		labelMap[res.Label] = &models.RevenueTrendPoint{Label: res.Label, Real: res.Total}
-	}
-
-	for _, res := range projectedResults {
-		if pt, ok := labelMap[res.Label]; ok {
-			pt.Projected = res.Total
-		} else {
-			labelMap[res.Label] = &models.RevenueTrendPoint{Label: res.Label, Projected: res.Total}
-		}
-	}
-
-	// Combine all results and sort
-	// Include both real and projected data points
-	// In a real implementation, we would ensure all months in range are present
-	for _, res := range realResults {
-		if pt, ok := labelMap[res.Label]; ok {
-			points = append(points, *pt)
-			delete(labelMap, res.Label) // Remove to avoid duplicates
-		}
-	}
-
-	// Add remaining projected-only months
-	for _, pt := range labelMap {
-		points = append(points, *pt)
-	}
-
-	return points, nil
+	return mergeRevenueTrend(realRows, projectedRows), nil
 }
 
 func (r *analyticsRepository) GetLotDistribution(ctx context.Context, projectID *uint) (*models.LotDistribution, error) {
@@ -366,42 +384,291 @@ func (r *analyticsRepository) GetLotDistribution(ctx context.Context, projectID 
 	return &dist, nil
 }
 
-func (r *analyticsRepository) GetProjectPerformance(ctx context.Context, filters models.AnalyticsFilters) ([]models.ProjectPerformance, error) {
-	query := r.db.WithContext(ctx).Preload("Lots")
-	if filters.ProjectID != nil {
-		query = query.Where("id = ?", *filters.ProjectID)
-	}
-	var projects []models.Project
-	err := query.Find(&projects).Error
+// GetProjectLotDistributions returns the lot distribution for every project in
+// one grouped query. Projects without lots are present with zero totals.
+func (r *analyticsRepository) GetProjectLotDistributions(ctx context.Context) (map[uint]*models.LotDistribution, error) {
+	rows := []struct {
+		ProjectID uint
+		Status    string
+		Count     int
+	}{}
+
+	err := r.db.WithContext(ctx).Table("projects").
+		Select("projects.id AS project_id, COALESCE(lots.status, '') AS status, COUNT(lots.id) AS count").
+		Joins("LEFT JOIN lots ON lots.project_id = projects.id").
+		Group("projects.id, lots.status").
+		Scan(&rows).Error
 	if err != nil {
 		return nil, err
 	}
 
-	var performance []models.ProjectPerformance
-	for _, p := range projects {
-		var totalLots, soldLots int
-		totalLots = p.LotCount
-		if totalLots == 0 {
-			totalLots = len(p.Lots)
+	result := make(map[uint]*models.LotDistribution, len(rows))
+	for _, row := range rows {
+		dist, ok := result[row.ProjectID]
+		if !ok {
+			dist = &models.LotDistribution{}
+			result[row.ProjectID] = dist
 		}
-
-		for _, lot := range p.Lots {
-			if lot.Status == models.LotStatusFinanced || lot.Status == models.LotStatusFullyPaid {
-				soldLots++
-			}
+		dist.TotalLots += row.Count
+		switch row.Status {
+		case models.LotStatusAvailable:
+			dist.Available += row.Count
+		case models.LotStatusReserved:
+			dist.Reserved += row.Count
+		case models.LotStatusFinanced:
+			dist.Financed += row.Count
+		case models.LotStatusFullyPaid:
+			dist.FullyPaid += row.Count
 		}
+	}
 
+	for _, dist := range result {
+		applyLotPercentages(dist)
+	}
+	return result, nil
+}
+
+// applyLotPercentages fills the derived percentages of a distribution.
+func applyLotPercentages(dist *models.LotDistribution) {
+	if dist.TotalLots == 0 {
+		return
+	}
+	total := float64(dist.TotalLots)
+	dist.AvailablePercentage = (float64(dist.Available) / total) * 100
+	dist.ReservedPercentage = (float64(dist.Reserved) / total) * 100
+	dist.FinancedPercentage = (float64(dist.Financed) / total) * 100
+	dist.FullyPaidPercentage = (float64(dist.FullyPaid) / total) * 100
+}
+
+// GetProjectOverviewMetrics aggregates the current and previous overview
+// metrics for every project in one statement, so the refresh job no longer
+// queries project by project.
+func (r *analyticsRepository) GetProjectOverviewMetrics(ctx context.Context, curStart, curEnd, prevStart, prevEnd *time.Time) ([]models.ProjectOverviewMetrics, error) {
+	if curStart == nil || curEnd == nil || prevStart == nil || prevEnd == nil {
+		return nil, fmt.Errorf("comparison periods are required")
+	}
+
+	const query = `
+SELECT p.id AS project_id,
+       COALESCE((SELECT SUM(pay.paid_amount) FROM payments pay
+                 JOIN contracts c ON c.id = pay.contract_id
+                 JOIN lots l ON l.id = c.lot_id
+                 WHERE pay.status = ? AND l.project_id = p.id), 0) AS total_revenue,
+       COALESCE((SELECT COUNT(*) FROM contracts c
+                 JOIN lots l ON l.id = c.lot_id
+                 WHERE c.status = ? AND c.active = true AND l.project_id = p.id), 0) AS active_contracts,
+       COALESCE((SELECT AVG(pay.paid_amount) FROM payments pay
+                 JOIN contracts c ON c.id = pay.contract_id
+                 JOIN lots l ON l.id = c.lot_id
+                 WHERE pay.status = ? AND l.project_id = p.id), 0) AS average_payment,
+       COALESCE((SELECT COUNT(*) FROM lots l WHERE l.project_id = p.id), 0) AS total_lots,
+       COALESCE((SELECT COUNT(*) FROM lots l WHERE l.project_id = p.id AND l.status IN ?), 0) AS occupied_lots,
+       COALESCE((SELECT SUM(pay.paid_amount) FROM payments pay
+                 JOIN contracts c ON c.id = pay.contract_id
+                 JOIN lots l ON l.id = c.lot_id
+                 WHERE pay.status = ? AND l.project_id = p.id
+                   AND pay.payment_date >= ? AND pay.payment_date <= ?), 0) AS previous_revenue,
+       COALESCE((SELECT COUNT(*) FROM contracts c
+                 JOIN lots l ON l.id = c.lot_id
+                 WHERE c.status = ? AND c.active = true AND l.project_id = p.id
+                   AND c.approved_at >= ? AND c.approved_at <= ?), 0) AS previous_contracts,
+       COALESCE((SELECT AVG(pay.paid_amount) FROM payments pay
+                 JOIN contracts c ON c.id = pay.contract_id
+                 JOIN lots l ON l.id = c.lot_id
+                 WHERE pay.status = ? AND l.project_id = p.id
+                   AND pay.payment_date >= ? AND pay.payment_date <= ?), 0) AS previous_average_payment,
+       COALESCE((SELECT COUNT(DISTINCT c.lot_id) FROM contracts c
+                 JOIN lots l ON l.id = c.lot_id
+                 WHERE c.status IN ? AND l.project_id = p.id
+                   AND c.approved_at IS NOT NULL AND c.approved_at <= ?
+                   AND (c.closed_at IS NULL OR c.closed_at > ?)), 0) AS previous_occupied_lots,
+       COALESCE((SELECT SUM(pay.paid_amount) FROM payments pay
+                 JOIN contracts c ON c.id = pay.contract_id
+                 JOIN lots l ON l.id = c.lot_id
+                 WHERE pay.status = ? AND l.project_id = p.id
+                   AND pay.payment_date >= ? AND pay.payment_date <= ?), 0) AS comparison_revenue,
+       COALESCE((SELECT COUNT(*) FROM contracts c
+                 JOIN lots l ON l.id = c.lot_id
+                 WHERE c.status = ? AND c.active = true AND l.project_id = p.id
+                   AND c.approved_at >= ? AND c.approved_at <= ?), 0) AS comparison_contracts,
+       COALESCE((SELECT AVG(pay.paid_amount) FROM payments pay
+                 JOIN contracts c ON c.id = pay.contract_id
+                 JOIN lots l ON l.id = c.lot_id
+                 WHERE pay.status = ? AND l.project_id = p.id
+                   AND pay.payment_date >= ? AND pay.payment_date <= ?), 0) AS comparison_avg_payment
+FROM projects p
+ORDER BY p.id`
+
+	occupiedStatuses := []string{
+		models.LotStatusReserved,
+		models.LotStatusFinanced,
+		models.LotStatusFullyPaid,
+	}
+	portfolioStatuses := []string{
+		models.ContractStatusApproved,
+		models.ContractStatusClosed,
+	}
+
+	var rows []models.ProjectOverviewMetrics
+	err := r.db.WithContext(ctx).Raw(query,
+		models.PaymentStatusPaid,
+		models.ContractStatusApproved,
+		models.PaymentStatusPaid,
+		occupiedStatuses,
+		models.PaymentStatusPaid, *prevStart, *prevEnd,
+		models.ContractStatusApproved, *prevStart, *prevEnd,
+		models.PaymentStatusPaid, *prevStart, *prevEnd,
+		portfolioStatuses, *prevEnd, *prevEnd,
+		models.PaymentStatusPaid, *curStart, *curEnd,
+		models.ContractStatusApproved, *curStart, *curEnd,
+		models.PaymentStatusPaid, *curStart, *curEnd,
+	).Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+// GetWeeklyPerformanceByProject returns the paid collections of the last four
+// weeks per project, in chronological order. Projects without collections are
+// absent so callers can omit the series instead of fabricating one.
+func (r *analyticsRepository) GetWeeklyPerformanceByProject(ctx context.Context) (map[uint][]float64, error) {
+	since := time.Now().AddDate(0, 0, -28)
+
+	rows := []struct {
+		ProjectID uint
+		Week      time.Time
+		Total     float64
+	}{}
+
+	err := r.db.WithContext(ctx).Table("payments").
+		Select("lots.project_id AS project_id, DATE_TRUNC('week', payments.payment_date) AS week, COALESCE(SUM(payments.paid_amount), 0) AS total").
+		Joins("JOIN contracts ON contracts.id = payments.contract_id").
+		Joins("JOIN lots ON lots.id = contracts.lot_id").
+		Where("payments.status = ?", models.PaymentStatusPaid).
+		Where("payments.payment_date >= ?", since).
+		Group("lots.project_id, DATE_TRUNC('week', payments.payment_date)").
+		Order("lots.project_id ASC, week ASC").
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+
+	result := make(map[uint][]float64)
+	for _, row := range rows {
+		result[row.ProjectID] = append(result[row.ProjectID], row.Total)
+	}
+	return result, nil
+}
+
+// GetRevenueTrendByProject computes the revenue trend for every project with
+// two bounded queries (paid and pending) and merges them per project.
+func (r *analyticsRepository) GetRevenueTrendByProject(ctx context.Context, timeframe string, year *int) (map[uint][]models.RevenueTrendPoint, error) {
+	startDate, endDate := trendRange(timeframe, year)
+
+	type projectTrendRow struct {
+		ProjectID uint
+		Month     time.Time
+		Label     string
+		Total     float64
+	}
+
+	run := func(column, status, amountColumn string) ([]projectTrendRow, error) {
+		query := r.db.WithContext(ctx).Table("payments").
+			Select("lots.project_id AS project_id, DATE_TRUNC('month', payments."+column+") AS month, TO_CHAR(payments."+column+", 'Mon') AS label, COALESCE(SUM(payments."+amountColumn+"), 0) AS total").
+			Joins("JOIN contracts ON contracts.id = payments.contract_id").
+			Joins("JOIN lots ON lots.id = contracts.lot_id").
+			Where("payments.status = ?", status).
+			Where("payments."+column+" >= ?", startDate).
+			Where("payments."+column+" <= ?", endDate).
+			Group("lots.project_id, DATE_TRUNC('month', payments." + column + "), TO_CHAR(payments." + column + ", 'Mon')").
+			Order("lots.project_id ASC, month ASC")
+		var rows []projectTrendRow
+		err := query.Scan(&rows).Error
+		return rows, err
+	}
+
+	realRows, err := run("payment_date", models.PaymentStatusPaid, "paid_amount")
+	if err != nil {
+		return nil, err
+	}
+	projectedRows, err := run("due_date", models.PaymentStatusPending, "amount")
+	if err != nil {
+		return nil, err
+	}
+
+	realByProject := make(map[uint][]revenueTrendRow)
+	for _, row := range realRows {
+		realByProject[row.ProjectID] = append(realByProject[row.ProjectID], revenueTrendRow{
+			Month: row.Month,
+			Label: row.Label,
+			Total: row.Total,
+		})
+	}
+	projectedByProject := make(map[uint][]revenueTrendRow)
+	for _, row := range projectedRows {
+		projectedByProject[row.ProjectID] = append(projectedByProject[row.ProjectID], revenueTrendRow{
+			Month: row.Month,
+			Label: row.Label,
+			Total: row.Total,
+		})
+	}
+
+	projectIDs := make(map[uint]struct{}, len(realByProject)+len(projectedByProject))
+	for id := range realByProject {
+		projectIDs[id] = struct{}{}
+	}
+	for id := range projectedByProject {
+		projectIDs[id] = struct{}{}
+	}
+
+	result := make(map[uint][]models.RevenueTrendPoint, len(projectIDs))
+	for id := range projectIDs {
+		result[id] = mergeRevenueTrend(realByProject[id], projectedByProject[id])
+	}
+	return result, nil
+}
+
+func (r *analyticsRepository) GetProjectPerformance(ctx context.Context, filters models.AnalyticsFilters) ([]models.ProjectPerformance, error) {
+	rows := []struct {
+		ProjectID   uint
+		ProjectName string
+		TotalLots   int
+		SoldLots    int
+	}{}
+
+	query := r.db.WithContext(ctx).Table("projects").
+		Select("projects.id AS project_id, projects.name AS project_name, COUNT(lots.id) AS total_lots, "+
+			"COALESCE(SUM(CASE WHEN lots.status IN ? THEN 1 ELSE 0 END), 0) AS sold_lots",
+			[]string{models.LotStatusFinanced, models.LotStatusFullyPaid}).
+		Joins("LEFT JOIN lots ON lots.project_id = projects.id").
+		Group("projects.id, projects.name").
+		Order("projects.id ASC")
+	if filters.ProjectID != nil {
+		query = query.Where("projects.id = ?", *filters.ProjectID)
+	}
+
+	if err := query.Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+
+	weekly, err := r.GetWeeklyPerformanceByProject(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	performance := make([]models.ProjectPerformance, 0, len(rows))
+	for _, row := range rows {
 		growth := 0.0
-		if totalLots > 0 {
-			growth = (float64(soldLots) / float64(totalLots)) * 100
+		if row.TotalLots > 0 {
+			growth = (float64(row.SoldLots) / float64(row.TotalLots)) * 100
 		}
 
-		// Mock weekly performance for now or calculate real ones from payments
 		performance = append(performance, models.ProjectPerformance{
-			ProjectID:         strconv.FormatUint(uint64(p.ID), 10),
-			ProjectName:       p.Name,
+			ProjectID:         strconv.FormatUint(uint64(row.ProjectID), 10),
+			ProjectName:       row.ProjectName,
 			GrowthPercentage:  growth,
-			WeeklyPerformance: []float64{65, 59, 80, 81}, // Mock weekly data for now
+			WeeklyPerformance: weekly[row.ProjectID],
 		})
 	}
 

@@ -76,27 +76,44 @@ func calculatePercentageChange(current, previous float64) float64 {
 	return float64(int(change*10+0.5)) / 10
 }
 
-// getPreviousPeriod calculates the previous period date range based on current filters
+// defaultComparisonWindow returns the most recent complete 30-day window.
+func defaultComparisonWindow() (time.Time, time.Time) {
+	now := time.Now()
+	return now.AddDate(0, 0, -30), now
+}
+
+// getPreviousPeriod returns the window immediately before the current one.
+// The current window comes from the filters; when a bound is missing it is
+// inferred with a 30-day length, and when no bound is given it is the most
+// recent complete 30-day window.
 func getPreviousPeriod(startDate, endDate *time.Time) (prevStart, prevEnd *time.Time) {
-	if startDate == nil || endDate == nil {
-		// Default to 30 days if no dates provided
-		now := time.Now()
-		currentStart := now.AddDate(0, 0, -30)
-
-		prevEnd := currentStart.AddDate(0, 0, -1) // Day before current start
-		prevStart := prevEnd.AddDate(0, 0, -30)
-
-		return &prevStart, &prevEnd
+	var currentStart, currentEnd time.Time
+	switch {
+	case startDate != nil && endDate != nil:
+		currentStart, currentEnd = *startDate, *endDate
+	case startDate != nil:
+		currentStart = *startDate
+		currentEnd = startDate.AddDate(0, 0, 30)
+	case endDate != nil:
+		currentEnd = *endDate
+		currentStart = endDate.AddDate(0, 0, -30)
+	default:
+		currentStart, currentEnd = defaultComparisonWindow()
 	}
 
-	// Calculate the duration of the current period
-	duration := endDate.Sub(*startDate)
-
-	// Previous period ends one day before current start
-	prevEndTime := startDate.AddDate(0, 0, -1)
+	duration := currentEnd.Sub(currentStart)
+	prevEndTime := currentStart.AddDate(0, 0, -1)
 	prevStartTime := prevEndTime.Add(-duration)
 
 	return &prevStartTime, &prevEndTime
+}
+
+// currentPeriodFromPrevious reconstructs the current window that follows the
+// previous one, so the refresh job can compute like-for-like comparisons.
+func currentPeriodFromPrevious(prevStart, prevEnd *time.Time) (time.Time, time.Time) {
+	currentStart := prevEnd.AddDate(0, 0, 1)
+	duration := prevEnd.Sub(*prevStart)
+	return currentStart, currentStart.Add(duration)
 }
 
 func (s *AnalyticsService) computeOverview(ctx context.Context, filters models.AnalyticsFilters) (*models.AnalyticsOverview, error) {
@@ -144,18 +161,38 @@ func (s *AnalyticsService) computeOverview(ctx context.Context, filters models.A
 		prevAvgPayment = 0
 	}
 
-	// Previous period occupancy (as of prevEnd when date range is set; otherwise 0 for comparison)
+	// When no period is selected the displayed totals are all-time, so the
+	// change compares two complete 30-day windows instead of mixing an
+	// all-time total with an unrelated prior window.
+	comparisonRevenue := totalRevenue
+	comparisonContracts := activeContracts
+	comparisonAvgPayment := avgPayment
+	if !filters.HasDateFilter() {
+		curStart, curEnd := defaultComparisonWindow()
+		if value, err := s.analyticsRepo.GetTotalRevenue(ctx, filters.ProjectID, &curStart, &curEnd); err == nil {
+			comparisonRevenue = value
+		}
+		if value, err := s.analyticsRepo.GetActiveContractsCount(ctx, filters.ProjectID, &curStart, &curEnd); err == nil {
+			comparisonContracts = value
+		}
+		if value, err := s.analyticsRepo.GetAveragePayment(ctx, filters.ProjectID, &curStart, &curEnd); err == nil {
+			comparisonAvgPayment = value
+		}
+	}
+
+	// Previous occupancy is computed for the comparison window whenever one
+	// exists, including the default dashboard.
 	prevOccupancy := 0.0
-	if filters.EndDate != nil && prevEnd != nil {
+	if prevEnd != nil {
 		if rate, err := s.analyticsRepo.GetOccupancyRate(ctx, filters.ProjectID, prevEnd); err == nil {
 			prevOccupancy = rate
 		}
 	}
 
 	// Calculate percentage changes
-	revenueChange := calculatePercentageChange(totalRevenue, prevRevenue)
-	contractsChange := calculatePercentageChange(float64(activeContracts), float64(prevContracts))
-	paymentChange := calculatePercentageChange(avgPayment, prevAvgPayment)
+	revenueChange := calculatePercentageChange(comparisonRevenue, prevRevenue)
+	contractsChange := calculatePercentageChange(float64(comparisonContracts), float64(prevContracts))
+	paymentChange := calculatePercentageChange(comparisonAvgPayment, prevAvgPayment)
 	occupancyChange := calculatePercentageChange(occupancyRate, prevOccupancy)
 
 	// Default currency symbol (can be project-specific in the future)
@@ -260,8 +297,8 @@ func (s *AnalyticsService) GetSellerPerformance(ctx context.Context, filters mod
 func (s *AnalyticsService) RefreshCache(ctx context.Context) error {
 	logger.Info("[AnalyticsService] Refreshing analytics cache in background...")
 
-	// Get all projects to refresh their specific caches
-	projects, err := s.projectRepo.FindAll(ctx)
+	// Only the project identities are needed; avoid loading every column.
+	projects, err := s.projectRepo.FindAllSummaries(ctx)
 	if err != nil {
 		logger.Error("Failed to fetch projects for cache refresh", "error", err)
 		return err
@@ -272,11 +309,45 @@ func (s *AnalyticsService) RefreshCache(ctx context.Context) error {
 	_, _ = s.GetDistribution(ctx, nil)
 	_, _ = s.GetPerformance(ctx, models.AnalyticsFilters{})
 
-	// Refresh each project stats
-	for _, p := range projects {
-		pid := p.ID
-		_, _ = s.GetOverview(ctx, models.AnalyticsFilters{ProjectID: &pid})
-		_, _ = s.GetDistribution(ctx, &pid)
+	// Refresh every project from a bounded set of aggregate queries instead of
+	// querying project by project.
+	prevStart, prevEnd := getPreviousPeriod(nil, nil)
+	curStart, curEnd := currentPeriodFromPrevious(prevStart, prevEnd)
+
+	metrics, err := s.analyticsRepo.GetProjectOverviewMetrics(ctx, &curStart, &curEnd, prevStart, prevEnd)
+	if err != nil {
+		logger.Error("Failed to compute project overview metrics", "error", err)
+		return err
+	}
+
+	distributions, err := s.analyticsRepo.GetProjectLotDistributions(ctx)
+	if err != nil {
+		logger.Error("Failed to compute project lot distributions", "error", err)
+		return err
+	}
+
+	trends, err := s.analyticsRepo.GetRevenueTrendByProject(ctx, "", nil)
+	if err != nil {
+		logger.Error("Failed to compute project revenue trends", "error", err)
+		return err
+	}
+
+	metricsByProject := make(map[uint]models.ProjectOverviewMetrics, len(metrics))
+	for _, metric := range metrics {
+		metricsByProject[metric.ProjectID] = metric
+	}
+
+	for _, project := range projects {
+		pid := project.ID
+
+		overview := buildProjectOverview(metricsByProject[pid], trends[pid])
+		_ = s.analyticsRepo.SetCache(ctx, "analytics_overview", &pid, overview, 15*time.Minute)
+
+		dist := distributions[pid]
+		if dist == nil {
+			dist = &models.LotDistribution{}
+		}
+		_ = s.analyticsRepo.SetCache(ctx, "analytics_distribution", &pid, dist, 15*time.Minute)
 	}
 
 	// Clean up old cache
@@ -286,4 +357,37 @@ func (s *AnalyticsService) RefreshCache(ctx context.Context) error {
 	// No admin notifications here: job runs every 15 min (and per instance in multi-replica setups),
 	// which would spam admins. Progress is visible in logs.
 	return nil
+}
+
+// buildProjectOverview assembles the cached overview for one project from the
+// batched metrics and trend rows.
+func buildProjectOverview(metric models.ProjectOverviewMetrics, trend []models.RevenueTrendPoint) *models.AnalyticsOverview {
+	occupancy := 0.0
+	previousOccupancy := 0.0
+	if metric.TotalLots > 0 {
+		occupancy = (float64(metric.OccupiedLots) / float64(metric.TotalLots)) * 100
+		previousOccupancy = (float64(metric.PreviousOccupiedLots) / float64(metric.TotalLots)) * 100
+	}
+
+	revenueTrend := trend
+	if revenueTrend == nil {
+		revenueTrend = []models.RevenueTrendPoint{}
+	}
+
+	return &models.AnalyticsOverview{
+		TotalRevenue:              metric.TotalRevenue,
+		PreviousRevenue:           metric.PreviousRevenue,
+		RevenueChangePercentage:   calculatePercentageChange(metric.ComparisonRevenue, metric.PreviousRevenue),
+		ActiveContracts:           metric.ActiveContracts,
+		PreviousContracts:         metric.PreviousContracts,
+		ContractsChangePercentage: calculatePercentageChange(float64(metric.ComparisonContracts), float64(metric.PreviousContracts)),
+		AveragePayment:            metric.AveragePayment,
+		PreviousAveragePayment:    metric.PreviousAveragePayment,
+		PaymentChangePercentage:   calculatePercentageChange(metric.ComparisonAvgPayment, metric.PreviousAveragePayment),
+		OccupancyRate:             occupancy,
+		PreviousOccupancyRate:     previousOccupancy,
+		OccupancyChangePercentage: calculatePercentageChange(occupancy, previousOccupancy),
+		CurrencySymbol:            "L",
+		RevenueTrend:              revenueTrend,
+	}
 }

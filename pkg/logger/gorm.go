@@ -2,10 +2,12 @@ package logger
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
+	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
 
@@ -45,6 +47,13 @@ func (l *GormLogger) Error(ctx context.Context, msg string, data ...interface{})
 	}
 }
 
+// isRecordNotFound reports whether a query failed only because no row matched.
+// Those lookups are normal control flow (cache misses, optional relations) and
+// must not be reported as SQL errors.
+func isRecordNotFound(err error) bool {
+	return errors.Is(err, gorm.ErrRecordNotFound)
+}
+
 func (l *GormLogger) Trace(ctx context.Context, begin time.Time, fc func() (sql string, rowsAffected int64), err error) {
 	if l.LogLevel <= logger.Silent {
 		return
@@ -59,9 +68,15 @@ func (l *GormLogger) Trace(ctx context.Context, begin time.Time, fc func() (sql 
 		slog.Duration("elapsed", elapsed),
 	}
 
-	if err != nil && l.LogLevel >= logger.Error {
-		fields = append(fields, slog.String("error", err.Error()))
-		Error("SQL Error", fields...)
+	if err != nil {
+		if isRecordNotFound(err) {
+			Debug("SQL record not found", fields...)
+			return
+		}
+		if l.LogLevel >= logger.Error {
+			fields = append(fields, slog.String("error", err.Error()))
+			Error("SQL Error", fields...)
+		}
 		return
 	}
 

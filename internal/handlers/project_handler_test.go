@@ -261,6 +261,10 @@ func (s *projectRepoForHandlerTests) FindAll(context.Context) ([]models.Project,
 	return s.list, s.err
 }
 
+func (s *projectRepoForHandlerTests) FindAllSummaries(context.Context) ([]models.Project, error) {
+	return s.list, s.err
+}
+
 func newProjectHandlerWithRepo(t *testing.T, repo repository.ProjectRepository, lotRepo repository.LotRepository, photos ...models.ProjectPhoto) (*ProjectHandler, sqlmock.Sqlmock) {
 	t.Helper()
 

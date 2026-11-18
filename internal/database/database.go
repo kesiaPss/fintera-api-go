@@ -2,7 +2,6 @@ package database
 
 import (
 	"fmt"
-	"os"
 	"time"
 
 	pkgLogger "github.com/sjperalta/fintera-api/pkg/logger"
@@ -12,13 +11,21 @@ import (
 	"gorm.io/gorm/logger"
 )
 
-// Connect establishes a connection to the PostgreSQL database
-func Connect(databaseURL string) (*gorm.DB, error) {
-	// Configure GORM logger
-	logLevel := logger.Silent
-	if os.Getenv("ENVIRONMENT") != "production" {
-		logLevel = logger.Info
+// gormLogLevel maps the application environment to the database log level.
+// Production stays silent for routine queries; other environments log them.
+func gormLogLevel(environment string) logger.LogLevel {
+	if environment == "production" {
+		return logger.Silent
 	}
+	return logger.Info
+}
+
+// Connect establishes a connection to the PostgreSQL database. environment
+// comes from the application configuration so the database logger cannot
+// disagree with the rest of the app about the environment.
+func Connect(databaseURL, environment string) (*gorm.DB, error) {
+	// Configure GORM logger
+	logLevel := gormLogLevel(environment)
 
 	gormLogger := pkgLogger.NewGormLogger(
 		logLevel,

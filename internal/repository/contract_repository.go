@@ -991,6 +991,7 @@ type ProjectRepository interface {
 	Delete(ctx context.Context, id uint) error
 	List(ctx context.Context, query *ListQuery) ([]models.Project, int64, error)
 	FindAll(ctx context.Context) ([]models.Project, error)
+	FindAllSummaries(ctx context.Context) ([]models.Project, error)
 }
 
 type projectRepository struct {
@@ -1157,6 +1158,14 @@ func (r *projectRepository) List(ctx context.Context, query *ListQuery) ([]model
 func (r *projectRepository) FindAll(ctx context.Context) ([]models.Project, error) {
 	var projects []models.Project
 	err := r.db.WithContext(ctx).Find(&projects).Error
+	return projects, err
+}
+
+// FindAllSummaries returns only the identity of each project. Background jobs
+// use it to avoid loading every column of the projects table.
+func (r *projectRepository) FindAllSummaries(ctx context.Context) ([]models.Project, error) {
+	var projects []models.Project
+	err := r.db.WithContext(ctx).Select("id, name").Find(&projects).Error
 	return projects, err
 }
 
