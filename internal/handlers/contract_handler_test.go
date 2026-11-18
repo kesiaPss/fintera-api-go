@@ -167,11 +167,11 @@ func (s *paymentRepoStub) FindOverdue(context.Context) ([]models.Payment, error)
 	return nil, s.err
 }
 
-func (s *paymentRepoStub) FindOverdueForActiveContracts(context.Context) ([]models.Payment, error) {
+func (s *paymentRepoStub) FindOverdueReminders(context.Context) ([]models.Payment, error) {
 	return nil, s.err
 }
 
-func (s *paymentRepoStub) FindPaymentsDueTomorrowForActiveContracts(context.Context) ([]models.Payment, error) {
+func (s *paymentRepoStub) FindUpcomingReminders(context.Context) ([]models.Payment, error) {
 	return nil, s.err
 }
 
@@ -268,6 +268,10 @@ func (s *userRepoStub) Create(_ context.Context, user *models.User) error {
 
 func (s *userRepoStub) Update(_ context.Context, user *models.User) error {
 	s.updated = append(s.updated, user)
+	return s.err
+}
+
+func (s *userRepoStub) UpdateCreditScore(context.Context, uint, int) error {
 	return s.err
 }
 

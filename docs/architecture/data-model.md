@@ -223,6 +223,7 @@ with golang-migrate:
 | 000024 | `projects.guid` backfill + default |
 | 000026 | `payments.amount`, `payments.interest_amount` widened to `NUMERIC(15,2)` |
 | 000041 | Analytics indexes and cache uniqueness |
+| 000042 | `payments(contract_id, due_date)` index |
 
 Applied migrations are immutable. Add a new numbered pair instead of editing
 history.
@@ -231,7 +232,9 @@ The analytics workload relies on `idx_payments_payment_date`,
 `idx_payments_status_payment_date`, `idx_contracts_status_active_lot`, and
 `idx_lots_project_status`; `idx_analytics_cache_key_project` is unique and
 `idx_analytics_cache_global_key` is a partial unique index for the global cache
-scope.
+scope. `idx_payments_contract_due_date` on `payments(contract_id, due_date)`
+covers contract payment history, overdue-reminder lookups, and any query that
+filters by contract and sorts by due date.
 
 ## Seeds
 

@@ -165,6 +165,11 @@ func (m *mockUserRepoForContract) Update(ctx context.Context, user *models.User)
 	return args.Error(0)
 }
 
+func (m *mockUserRepoForContract) UpdateCreditScore(ctx context.Context, userID uint, score int) error {
+	args := m.Called(ctx, userID, score)
+	return args.Error(0)
+}
+
 func (m *mockUserRepoForContract) SetRecoveryCode(ctx context.Context, userID uint, code string, sentAt time.Time) error {
 	args := m.Called(ctx, userID, code, sentAt)
 	return args.Error(0)
@@ -260,12 +265,12 @@ func (m *mockPaymentRepo) FindOverdue(ctx context.Context) ([]models.Payment, er
 	return args.Get(0).([]models.Payment), args.Error(1)
 }
 
-func (m *mockPaymentRepo) FindOverdueForActiveContracts(ctx context.Context) ([]models.Payment, error) {
+func (m *mockPaymentRepo) FindOverdueReminders(ctx context.Context) ([]models.Payment, error) {
 	args := m.Called(ctx)
 	return args.Get(0).([]models.Payment), args.Error(1)
 }
 
-func (m *mockPaymentRepo) FindPaymentsDueTomorrowForActiveContracts(ctx context.Context) ([]models.Payment, error) {
+func (m *mockPaymentRepo) FindUpcomingReminders(ctx context.Context) ([]models.Payment, error) {
 	args := m.Called(ctx)
 	return args.Get(0).([]models.Payment), args.Error(1)
 }

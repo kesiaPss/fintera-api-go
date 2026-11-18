@@ -147,6 +147,16 @@ cmd/api → handlers → services → repository → models
   (`GetProjectOverviewMetrics`, `GetProjectLotDistributions`,
   `GetRevenueTrendByProject`) instead of querying project by project. Cache
   writes are single `ON CONFLICT` upserts.
+- **Overdue notifications:** `PaymentService.CheckOverduePayments` groups
+  overdue payments by applicant user, so each user receives at most one
+  `payment_overdue` notification per run. The daily reminder jobs use
+  `FindOverdueReminders` and `FindUpcomingReminders`, which hydrate the payment,
+  contract, applicant user, lot, and project with one joined query instead of
+  GORM preloads.
+- **Credit score updates:** `CreditScoreService` recalculates from payment
+  history and calls `UserRepository.UpdateCreditScore`, which writes only
+  `credit_score` and `updated_at`. Previous behavior saved the full user row and
+  rewrote unrelated columns such as the password hash.
 
 ## Design decisions and trade-offs
 

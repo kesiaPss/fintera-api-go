@@ -26,17 +26,12 @@ func NewCreditScoreService(userRepo repository.UserRepository, contractRepo repo
 
 // UpdateScore calculates and updates credit score for a single user
 func (s *CreditScoreService) UpdateScore(ctx context.Context, userID uint) error {
-	user, err := s.userRepo.FindByID(ctx, userID)
-	if err != nil {
-		return fmt.Errorf("failed to find user: %w", err)
-	}
-
 	// Calculate credit score based on payment history
 	score := s.calculateCreditScore(ctx, userID)
 
-	// Update user's credit score
-	user.CreditScore = score
-	if err := s.userRepo.Update(ctx, user); err != nil {
+	// Update only the score columns; saving the full user row would rewrite
+	// unrelated fields such as the password hash.
+	if err := s.userRepo.UpdateCreditScore(ctx, userID, score); err != nil {
 		return fmt.Errorf("failed to update credit score: %w", err)
 	}
 
