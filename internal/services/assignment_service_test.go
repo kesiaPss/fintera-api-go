@@ -427,3 +427,51 @@ func TestContractAssignmentInputOrigins(t *testing.T) {
 		t.Fatal("unknown origin must be discarded")
 	}
 }
+
+func TestAssignNowCreatesAcceptedAssignment(t *testing.T) {
+	repo := newFakeAssignmentRepo()
+	service := newTestAssignmentService(repo)
+	contract := testContract(10)
+
+	assignment, err := service.AssignNow(context.Background(), &contract, 7, models.AssignmentOriginManual, assignmentTestNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if assignment == nil || assignment.Status != models.AssignmentStatusAccepted {
+		t.Fatalf("assignment = %+v", assignment)
+	}
+	if contract.SellerID == nil || *contract.SellerID != 7 {
+		t.Fatalf("contract seller = %+v", contract.SellerID)
+	}
+	if contract.AssignmentStatus != models.AssignmentStatusAccepted {
+		t.Fatalf("contract status = %s", contract.AssignmentStatus)
+	}
+	if contract.AcceptDeadlineAt != nil {
+		t.Fatal("accepted assignments must not carry a deadline")
+	}
+}
+
+func TestSupersedePendingDoesNotTouchScore(t *testing.T) {
+	repo := newFakeAssignmentRepo()
+	service := newTestAssignmentService(repo)
+	repo.assignments[1] = &models.Assignment{
+		ID:         1,
+		ContractID: 10,
+		SellerID:   7,
+		Status:     models.AssignmentStatusPending,
+		AssignedAt: assignmentTestNow.Add(-time.Hour),
+	}
+
+	if err := service.SupersedePending(context.Background(), 10, 99, assignmentTestNow); err != nil {
+		t.Fatal(err)
+	}
+	if got := repo.assignments[1].Status; got != models.AssignmentStatusSuperseded {
+		t.Fatalf("status = %s, want superseded", got)
+	}
+	if repo.statusUpdates != 1 {
+		t.Fatalf("status updates = %d", repo.statusUpdates)
+	}
+	if len(repo.outcomes) != 0 {
+		t.Fatal("superseded offers must not enter the score window")
+	}
+}

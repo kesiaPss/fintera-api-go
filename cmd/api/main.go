@@ -242,6 +242,7 @@ func setupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 			public.GET("/projects/:guid/drawings", h.Public.ListDrawings)
 			public.GET("/projects/:guid/photos", h.Public.ListProjectPhotos)
 			public.GET("/projects/:guid/lots/:lot_guid/photos", h.Public.ListLotPhotos)
+			public.GET("/sellers", h.Seller.PublicIndex)
 
 			// Guest reservation creation is tighter: 5 per IP per hour.
 			public.POST("/projects/:guid/lots/:lot_guid/contracts",
@@ -294,6 +295,8 @@ func setupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				admin.POST("/projects/:project_id/lots/:lot_id/contracts/:contract_id/reject", h.Contract.Reject)
 				admin.POST("/projects/:project_id/lots/:lot_id/contracts/:contract_id/cancel", h.Contract.Cancel)
 				admin.PATCH("/contracts/:guid/commission/pay", h.Contract.PayCommission)
+				admin.GET("/contracts/:guid/assignments", h.Contract.Assignments)
+				admin.POST("/contracts/:guid/assignments", h.Contract.Reassign)
 				admin.POST("/contracts/:guid/reminder", h.Contract.SendReminder)
 				admin.POST("/projects/:project_id/lots/:lot_id/contracts/:contract_id/capital_repayment", h.Contract.CapitalRepayment)
 

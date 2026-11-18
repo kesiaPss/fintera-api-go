@@ -59,6 +59,23 @@ Model guards: `Contract.MaySubmit`, `MayApprove`, `MayReject`, `MayCancel`,
   for the seller (`pending`, applied manually by an admin).
 - Audit log with the acting admin.
 
+### Seller assignment (`ContractService.CreateWithAssignment`)
+
+- A referral GUID or signed attribution cookie assigns the referring seller
+  with `origin = referral`, `status = accepted`.
+- A manual `seller_id` creates a pending offer with the configured acceptance
+  window.
+- Without a seller, the fairness selector picks an active high/medium seller and
+  creates a pending offer.
+- `POST /contracts/{guid}/assignments` (admin) reassigns in any contract status.
+  Pending offers are marked `superseded`; contracts outside `pending` /
+  `submitted` are assigned directly so their commission is stable.
+- If the commission was already paid to a different seller, reassignment creates
+  a pending `seller_commission_credits` row for the previous seller, clears the
+  paid markers and recalculates the commission for the new seller.
+- `GET /contracts/{guid}/assignments` returns the full offer history.
+
+
 ### Close (`ContractService.Close`)
 
 - Recalculate ledger balance; requires `balance >= 0`.

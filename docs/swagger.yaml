@@ -2048,6 +2048,90 @@ paths:
       summary: Get Contract by GUID
       tags:
       - Contracts
+  /contracts/{guid}/assignments:
+    get:
+      description: Assignment history of a contract, newest first. Admin only.
+      parameters:
+      - description: Contract GUID
+        in: path
+        name: guid
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: List contract assignments
+      tags:
+      - Contracts
+    post:
+      consumes:
+      - application/json
+      description: Assign or offer the contract to another seller in any status. A
+        paid commission is recovered from the previous seller as a pending credit.
+        Admin only.
+      parameters:
+      - description: Contract GUID
+        in: path
+        name: guid
+        required: true
+        type: string
+      - description: mode (seller|automatic), seller_id, accept, exclude_current
+        in: body
+        name: request
+        required: true
+        schema:
+          additionalProperties: true
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "422":
+          description: Unprocessable Entity
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Reassign a contract seller
+      tags:
+      - Contracts
   /contracts/{guid}/commission/pay:
     patch:
       description: Mark the seller commission of an approved/closed contract as paid
@@ -4563,6 +4647,27 @@ paths:
       summary: Resend guest account setup email
       tags:
       - Public Catalog
+  /public/sellers:
+    get:
+      description: Active sellers available as customer advisors. Exposes only name
+        and contact data.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: List public sellers
+      tags:
+      - Sellers
   /r/{guid}:
     get:
       description: Resolve an active seller referral GUID, record the visit and redirect

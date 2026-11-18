@@ -262,6 +262,33 @@ func (r *fakeAssignmentRepo) FindPendingBySeller(_ context.Context, sellerID uin
 	return result, nil
 }
 
+func (r *fakeAssignmentRepo) FindPendingByContract(_ context.Context, contractID uint) ([]models.Assignment, error) {
+	result := make([]models.Assignment, 0)
+	for _, assignment := range r.assignments {
+		if assignment.Status == models.AssignmentStatusPending && assignment.ContractID == contractID {
+			result = append(result, *assignment)
+		}
+	}
+	return result, nil
+}
+
+func (r *fakeAssignmentRepo) FindByContract(_ context.Context, contractID uint) ([]models.Assignment, error) {
+	result := make([]models.Assignment, 0)
+	for _, assignment := range r.assignments {
+		if assignment.ContractID == contractID {
+			result = append(result, *assignment)
+		}
+	}
+	for i := 0; i < len(result); i++ {
+		for j := i + 1; j < len(result); j++ {
+			if result[j].ID > result[i].ID {
+				result[i], result[j] = result[j], result[i]
+			}
+		}
+	}
+	return result, nil
+}
+
 func (r *fakeAssignmentRepo) FindPendingAll(context.Context) ([]models.Assignment, error) {
 	result := make([]models.Assignment, 0)
 	for _, assignment := range r.assignments {
@@ -296,7 +323,8 @@ func (r *fakeAssignmentRepo) UpdateStatusIfPending(_ context.Context, id uint, s
 func (r *fakeAssignmentRepo) ExpiredSellerIDsForContract(_ context.Context, contractID uint) ([]uint, error) {
 	ids := make([]uint, 0)
 	for _, assignment := range r.assignments {
-		if assignment.ContractID == contractID && assignment.Status == models.AssignmentStatusExpired {
+		if assignment.ContractID == contractID &&
+			(assignment.Status == models.AssignmentStatusExpired || assignment.Status == models.AssignmentStatusSuperseded) {
 			ids = append(ids, assignment.SellerID)
 		}
 	}

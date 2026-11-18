@@ -180,6 +180,179 @@ func (s *ContractService) ValidateAssignmentSeller(ctx context.Context, sellerID
 	return s.assignmentSvc.ValidateSeller(ctx, sellerID)
 }
 
+// Reassign modes accepted by the admin reassignment flow.
+const (
+	ReassignModeSeller    = "seller"
+	ReassignModeAutomatic = "automatic"
+)
+
+// ContractReassignInput carries the admin reassignment request. When Accept is
+// true the seller is assigned immediately; otherwise the seller receives a
+// normal offer with the configured acceptance window. Approved, closed and
+// cancelled contracts are always assigned immediately so the commission stays
+// stable.
+type ContractReassignInput struct {
+	Mode           string
+	SellerID       *uint
+	Accept         bool
+	ExcludeCurrent bool
+	ActorID        uint
+}
+
+// Reassign changes the seller of a contract in any lifecycle status. A paid
+// commission is recovered from the previous seller as a pending credit before
+// the new seller's commission is calculated.
+func (s *ContractService) Reassign(ctx context.Context, guid string, input ContractReassignInput) (*models.Contract, *models.Assignment, error) {
+	if s.assignmentSvc == nil {
+		return nil, nil, ErrAssignmentSellerInactive
+	}
+	contract, err := s.repo.FindByGUIDWithDetails(ctx, guid)
+	if err != nil {
+		return nil, nil, ErrNotFound
+	}
+
+	now := time.Now()
+	mode := strings.ToLower(strings.TrimSpace(input.Mode))
+	origin := models.AssignmentOriginManual
+	var seller *models.User
+
+	switch mode {
+	case "", ReassignModeAutomatic:
+		origin = models.AssignmentOriginAutomatic
+		var exclude []uint
+		if input.ExcludeCurrent && contract.SellerID != nil {
+			exclude = append(exclude, *contract.SellerID)
+		}
+		seller, err = s.assignmentSvc.SelectSeller(ctx, contract.ID, exclude)
+		if err != nil {
+			return nil, nil, err
+		}
+		if seller == nil && len(exclude) > 0 {
+			seller, err = s.assignmentSvc.SelectSeller(ctx, contract.ID, nil)
+			if err != nil {
+				return nil, nil, err
+			}
+		}
+		if seller == nil {
+			return nil, nil, ErrNoAssignableSeller
+		}
+	case ReassignModeSeller:
+		if input.SellerID == nil || *input.SellerID == 0 {
+			return nil, nil, ErrAssignmentSellerInactive
+		}
+		seller, err = s.assignmentSvc.ValidateSeller(ctx, *input.SellerID)
+		if err != nil {
+			return nil, nil, err
+		}
+	default:
+		return nil, nil, ErrAssignmentSellerInactive
+	}
+
+	previousSellerID := contract.SellerID
+	previousOrigin := contract.AssignmentOrigin
+	previousStatus := contract.AssignmentStatus
+	previousAssignedAt := contract.AssignedAt
+	previousDeadline := contract.AcceptDeadlineAt
+	previousRespondedAt := contract.RespondedAt
+	previousPaidAt := contract.CommissionPaidAt
+	previousPaidBy := contract.CommissionPaidBy
+
+	paidAmount := contract.CommissionAmount
+	if paidAmount <= 0 {
+		paidAmount = contract.CalculateCommission()
+	}
+	sameSeller := previousSellerID != nil && *previousSellerID == seller.ID
+	// Cancelled and rejected contracts already settled their commission (a
+	// cancellation may have created a recoverable credit). Reassigning them
+	// must not duplicate the credit or resurrect a commission.
+	skipCommission := contract.Status == models.ContractStatusCancelled ||
+		contract.Status == models.ContractStatusRejected
+
+	contract.SellerID = &seller.ID
+	contract.AssignmentOrigin = origin
+	if s.commissionSvc != nil && !skipCommission && (contract.CommissionPaidAt == nil || !sameSeller) {
+		if err := s.commissionSvc.ApplyToContract(ctx, contract, time.Time{}); err != nil {
+			contract.SellerID = previousSellerID
+			contract.AssignmentOrigin = previousOrigin
+			return nil, nil, err
+		}
+	}
+
+	creditNote := ""
+	if !skipCommission && contract.CommissionPaidAt != nil && previousSellerID != nil && !sameSeller && s.commissionSvc != nil {
+		credit, creditErr := s.commissionSvc.CreateCommissionCredit(ctx, contract, *previousSellerID, paidAmount)
+		if creditErr != nil {
+			contract.SellerID = previousSellerID
+			contract.AssignmentOrigin = previousOrigin
+			return nil, nil, creditErr
+		}
+		if credit != nil {
+			creditNote = fmt.Sprintf(". Crédito de comisión al vendedor anterior: L%.2f", credit.Amount)
+			contract.CommissionPaidAt = nil
+			contract.CommissionPaidBy = nil
+		}
+	}
+
+	if err := s.assignmentSvc.SupersedePending(ctx, contract.ID, input.ActorID, now); err != nil {
+		contract.SellerID = previousSellerID
+		contract.AssignmentOrigin = previousOrigin
+		contract.AssignmentStatus = previousStatus
+		contract.AssignedAt = previousAssignedAt
+		contract.AcceptDeadlineAt = previousDeadline
+		contract.RespondedAt = previousRespondedAt
+		contract.CommissionPaidAt = previousPaidAt
+		contract.CommissionPaidBy = previousPaidBy
+		return nil, nil, err
+	}
+
+	accept := input.Accept || (contract.Status != models.ContractStatusPending && contract.Status != models.ContractStatusSubmitted)
+	if accept {
+		if _, err := s.assignmentSvc.AssignNow(ctx, contract, seller.ID, origin, now); err != nil {
+			contract.CommissionPaidAt = previousPaidAt
+			contract.CommissionPaidBy = previousPaidBy
+			return nil, nil, err
+		}
+	} else if err := s.assignmentSvc.Offer(ctx, contract, seller, origin, now, nil); err != nil {
+		contract.CommissionPaidAt = previousPaidAt
+		contract.CommissionPaidBy = previousPaidBy
+		return nil, nil, err
+	}
+
+	contract.Seller = seller
+
+	if err := s.repo.Update(ctx, contract); err != nil {
+		return nil, nil, err
+	}
+
+	if s.auditSvc != nil {
+		previous := "sin vendedor"
+		if previousSellerID != nil {
+			previous = fmt.Sprintf("vendedor #%d", *previousSellerID)
+		}
+		detail := fmt.Sprintf("Reasignación manual: %s → %s (%s)%s", previous, seller.FullName, origin, creditNote)
+		logIgnoredError("write reassignment audit log", s.auditSvc.Log(ctx, input.ActorID, "REASSIGN", "Contract", contract.ID, detail, "", ""))
+	}
+
+	history, err := s.assignmentSvc.History(ctx, contract.ID)
+	if err != nil || len(history) == 0 {
+		return contract, nil, err
+	}
+	assignment := history[0]
+	return contract, &assignment, nil
+}
+
+// AssignmentHistory returns every seller offer attempted for a contract.
+func (s *ContractService) AssignmentHistory(ctx context.Context, guid string) ([]models.Assignment, error) {
+	contract, err := s.repo.FindByGUIDWithDetails(ctx, guid)
+	if err != nil {
+		return nil, ErrNotFound
+	}
+	if s.assignmentSvc == nil {
+		return []models.Assignment{}, nil
+	}
+	return s.assignmentSvc.History(ctx, contract.ID)
+}
+
 func normalizeAssignmentOrigin(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case models.AssignmentOriginReferral:

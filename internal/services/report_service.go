@@ -151,7 +151,8 @@ func (s *ReportService) GenerateCommissions(ctx context.Context, startDate, endD
 		sellerName := "Unknown"
 		if c.Seller != nil && c.Seller.FullName != "" {
 			sellerName = c.Seller.FullName
-		} else if c.Creator != nil {
+		} else if c.Creator != nil && c.Creator.FullName != "" &&
+			(c.Creator.IsSeller() || c.Creator.IsAdmin()) {
 			sellerName = c.Creator.FullName
 		}
 		commission := c.CommissionAmount

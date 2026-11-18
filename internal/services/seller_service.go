@@ -74,3 +74,23 @@ func (s *SellerService) List(ctx context.Context, search string) ([]models.Selle
 	}
 	return summaries, nil
 }
+
+// ListPublic returns the active sellers the customer portal can offer as
+// advisors. Only contact data is exposed; score, workload and revenue stay
+// internal.
+func (s *SellerService) ListPublic(ctx context.Context) ([]models.PublicSellerSummary, error) {
+	sellers, err := s.repo.ListActive(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+	summaries := make([]models.PublicSellerSummary, 0, len(sellers))
+	for _, seller := range sellers {
+		summaries = append(summaries, models.PublicSellerSummary{
+			ID:       seller.ID,
+			FullName: seller.FullName,
+			Phone:    seller.Phone,
+			Email:    seller.Email,
+		})
+	}
+	return summaries, nil
+}

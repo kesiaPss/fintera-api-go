@@ -16,6 +16,8 @@ type AssignmentRepository interface {
 	FindByIDWithDetails(ctx context.Context, id uint) (*models.Assignment, error)
 	FindPendingBySeller(ctx context.Context, sellerID uint) ([]models.Assignment, error)
 	FindPendingAll(ctx context.Context) ([]models.Assignment, error)
+	FindPendingByContract(ctx context.Context, contractID uint) ([]models.Assignment, error)
+	FindByContract(ctx context.Context, contractID uint) ([]models.Assignment, error)
 	FindOverduePending(ctx context.Context, now time.Time) ([]models.Assignment, error)
 	UpdateStatusIfPending(ctx context.Context, id uint, status string, respondedAt time.Time) (bool, error)
 	ExpiredSellerIDsForContract(ctx context.Context, contractID uint) ([]uint, error)
@@ -129,10 +131,32 @@ func (r *assignmentRepository) ExpiredSellerIDsForContract(ctx context.Context, 
 	var ids []uint
 	err := r.db.WithContext(ctx).
 		Model(&models.Assignment{}).
-		Where("contract_id = ? AND status = ?", contractID, models.AssignmentStatusExpired).
+		Where("contract_id = ? AND status IN ?", contractID,
+			[]string{models.AssignmentStatusExpired, models.AssignmentStatusSuperseded}).
 		Distinct("seller_id").
 		Pluck("seller_id", &ids).Error
 	return ids, err
+}
+
+// FindByContract returns the assignment history of one contract, newest first.
+func (r *assignmentRepository) FindByContract(ctx context.Context, contractID uint) ([]models.Assignment, error) {
+	var assignments []models.Assignment
+	err := r.db.WithContext(ctx).
+		Preload("Seller").
+		Where("contract_id = ?", contractID).
+		Order("id DESC").
+		Find(&assignments).Error
+	return assignments, err
+}
+
+// FindPendingByContract returns the active offers of one contract.
+func (r *assignmentRepository) FindPendingByContract(ctx context.Context, contractID uint) ([]models.Assignment, error) {
+	var assignments []models.Assignment
+	err := r.db.WithContext(ctx).
+		Preload("Seller").
+		Where("contract_id = ? AND status = ?", contractID, models.AssignmentStatusPending).
+		Find(&assignments).Error
+	return assignments, err
 }
 
 // ListAssignableSellers returns active sellers whose level is high or medium.

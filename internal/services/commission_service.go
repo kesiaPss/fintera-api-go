@@ -246,12 +246,17 @@ func (s *CommissionService) CreateCancellationCredit(ctx context.Context, contra
 	if amount <= 0 {
 		amount = contract.CalculateCommission()
 	}
-	if amount <= 0 {
+	return s.CreateCommissionCredit(ctx, contract, *contract.SellerID, amount)
+}
+
+// CreateCommissionCredit registers a pending recoverable credit for a seller.
+// It is reused when a paid commission must be recovered after a reassignment.
+func (s *CommissionService) CreateCommissionCredit(ctx context.Context, contract *models.Contract, sellerID uint, amount float64) (*models.SellerCommissionCredit, error) {
+	if s == nil || s.repo == nil || contract == nil || sellerID == 0 || amount <= 0 {
 		return nil, nil
 	}
-
 	credit := &models.SellerCommissionCredit{
-		SellerID:   *contract.SellerID,
+		SellerID:   sellerID,
 		ContractID: contract.ID,
 		Amount:     amount,
 		Status:     models.CommissionCreditStatusPending,

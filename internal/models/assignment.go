@@ -38,10 +38,11 @@ const (
 
 // Assignment status constants.
 const (
-	AssignmentStatusNone     = "none"
-	AssignmentStatusPending  = "pending"
-	AssignmentStatusAccepted = "accepted"
-	AssignmentStatusExpired  = "expired"
+	AssignmentStatusNone       = "none"
+	AssignmentStatusPending    = "pending"
+	AssignmentStatusAccepted   = "accepted"
+	AssignmentStatusExpired    = "expired"
+	AssignmentStatusSuperseded = "superseded"
 )
 
 // DefaultAssignmentAcceptWindow is how long a seller has to answer a manual or
@@ -61,7 +62,9 @@ func AssignmentDeadlineFrom(now time.Time) time.Time {
 
 // IsResponded reports whether the assignment already has a final answer.
 func (a *Assignment) IsResponded() bool {
-	return a.Status == AssignmentStatusAccepted || a.Status == AssignmentStatusExpired
+	return a.Status == AssignmentStatusAccepted ||
+		a.Status == AssignmentStatusExpired ||
+		a.Status == AssignmentStatusSuperseded
 }
 
 // IsOverdue reports whether a pending assignment passed its deadline.

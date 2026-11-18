@@ -327,6 +327,22 @@ func TestCommissionService_CreateCancellationCredit_SkipsUnpaidCommission(t *tes
 	assert.Empty(t, repo.credits, "a contract without a paid commission must not create a credit")
 }
 
+func TestCommissionService_CreateCommissionCreditForPreviousSeller(t *testing.T) {
+	repo := newFakeCommissionRepository()
+	service := NewCommissionService(repo, nil, nil)
+
+	contract := &models.Contract{ID: 11}
+	credit, err := service.CreateCommissionCredit(context.Background(), contract, 7, 1500)
+
+	require.NoError(t, err)
+	require.NotNil(t, credit)
+	assert.Equal(t, uint(7), credit.SellerID)
+	assert.Equal(t, uint(11), credit.ContractID)
+	assert.Equal(t, 1500.0, credit.Amount)
+	assert.Equal(t, models.CommissionCreditStatusPending, credit.Status)
+	require.Len(t, repo.credits, 1)
+}
+
 func TestCommissionService_ApplyCredit(t *testing.T) {
 	repo := newFakeCommissionRepository()
 	gdb, mockSQL := setupMockDB(t)

@@ -512,11 +512,11 @@ func (h *ContractHandler) create(c *gin.Context, lotID uint, guest bool) {
 		AttributionCookie: attributionCookie,
 	}); err != nil {
 		if errors.Is(err, services.ErrAssignmentSellerInactive) {
-			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "El vendedor seleccionado no está activo"})
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "El vendedor seleccionado no está activo", "code": "SELLER_INACTIVE"})
 			return
 		}
 		if guest && strings.Contains(strings.ToLower(err.Error()), "no está disponible") {
-			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "El lote ya no está disponible"})
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "El lote ya no está disponible", "code": "LOT_UNAVAILABLE"})
 			return
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -949,6 +949,79 @@ func (h *ContractHandler) Ledger(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ledger_entries": entries})
+}
+
+// @Summary List contract assignments
+// @Description Assignment history of a contract, newest first. Admin only.
+// @Tags Contracts
+// @Produce json
+// @Param guid path string true "Contract GUID"
+// @Success 200 {object} map[string]interface{}
+// @Failure 404 {object} map[string]string
+// @Security BearerAuth
+// @Router /contracts/{guid}/assignments [get]
+func (h *ContractHandler) Assignments(c *gin.Context) {
+	history, err := h.contractService.AssignmentHistory(c.Request.Context(), c.Param("guid"))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Contrato no encontrado"})
+		return
+	}
+	responses := make([]models.AssignmentResponse, 0, len(history))
+	for i := range history {
+		responses = append(responses, history[i].ToResponse())
+	}
+	c.JSON(http.StatusOK, gin.H{"assignments": responses})
+}
+
+type reassignRequest struct {
+	Mode           string `json:"mode"`
+	SellerID       *uint  `json:"seller_id"`
+	Accept         bool   `json:"accept"`
+	ExcludeCurrent bool   `json:"exclude_current"`
+}
+
+// @Summary Reassign a contract seller
+// @Description Assign or offer the contract to another seller in any status. A paid commission is recovered from the previous seller as a pending credit. Admin only.
+// @Tags Contracts
+// @Accept json
+// @Produce json
+// @Param guid path string true "Contract GUID"
+// @Param request body map[string]interface{} true "mode (seller|automatic), seller_id, accept, exclude_current"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400,404,409,422 {object} map[string]string
+// @Security BearerAuth
+// @Router /contracts/{guid}/assignments [post]
+func (h *ContractHandler) Reassign(c *gin.Context) {
+	var input reassignRequest
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Solicitud de reasignación inválida"})
+		return
+	}
+	contract, assignment, err := h.contractService.Reassign(c.Request.Context(), c.Param("guid"), services.ContractReassignInput{
+		Mode:           input.Mode,
+		SellerID:       input.SellerID,
+		Accept:         input.Accept,
+		ExcludeCurrent: input.ExcludeCurrent,
+		ActorID:        middleware.GetUserID(c),
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, services.ErrNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": "Contrato no encontrado"})
+		case errors.Is(err, services.ErrNoAssignableSeller):
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error(), "code": "NO_ASSIGNABLE_SELLER"})
+		case errors.Is(err, services.ErrAssignmentSellerInactive):
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error(), "code": "SELLER_INACTIVE"})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+	response := gin.H{"contract": contract.ToResponse()}
+	if assignment != nil {
+		response["assignment"] = assignment.ToResponse()
+	}
+	c.JSON(http.StatusOK, response)
 }
 
 const maxBankNameLength = 120

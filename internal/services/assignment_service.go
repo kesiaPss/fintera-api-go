@@ -100,7 +100,8 @@ func (s *AssignmentService) ApplyOnCreate(ctx context.Context, contract *models.
 		if contract.RespondedAt != nil {
 			responded = *contract.RespondedAt
 		}
-		return s.recordAccepted(ctx, contract, *contract.SellerID, contract.AssignmentOrigin, now, responded)
+		_, err := s.recordAccepted(ctx, contract, *contract.SellerID, contract.AssignmentOrigin, now, responded)
+		return err
 	case models.AssignmentStatusPending:
 		if contract.SellerID != nil {
 			deadline := contract.AcceptDeadlineAt
@@ -279,7 +280,7 @@ func (s *AssignmentService) recordPending(ctx context.Context, contract *models.
 	return nil
 }
 
-func (s *AssignmentService) recordAccepted(ctx context.Context, contract *models.Contract, sellerID uint, origin string, assignedAt, respondedAt time.Time) error {
+func (s *AssignmentService) recordAccepted(ctx context.Context, contract *models.Contract, sellerID uint, origin string, assignedAt, respondedAt time.Time) (*models.Assignment, error) {
 	if origin == "" {
 		origin = models.AssignmentOriginReferral
 	}
@@ -292,7 +293,7 @@ func (s *AssignmentService) recordAccepted(ctx context.Context, contract *models
 		RespondedAt: &respondedAt,
 	}
 	if err := s.repo.Create(ctx, assignment); err != nil {
-		return err
+		return nil, err
 	}
 	contract.SellerID = &sellerID
 	contract.AssignmentOrigin = origin
@@ -303,7 +304,37 @@ func (s *AssignmentService) recordAccepted(ctx context.Context, contract *models
 
 	s.audit(ctx, sellerID, "ASSIGN", fmt.Sprintf("Asignación aceptada automáticamente para el contrato %d", assignment.ID), assignment.ID)
 	s.notifyAssignmentAccepted(ctx, contract, assignment)
+	return assignment, nil
+}
+
+// AssignNow creates an already accepted assignment. Admins use it to correct
+// the seller of a contract without waiting for an acceptance window.
+func (s *AssignmentService) AssignNow(ctx context.Context, contract *models.Contract, sellerID uint, origin string, now time.Time) (*models.Assignment, error) {
+	return s.recordAccepted(ctx, contract, sellerID, origin, now, now)
+}
+
+// SupersedePending closes active offers of a contract. Superseded rows are
+// excluded from the seller score and from automatic reassignment.
+func (s *AssignmentService) SupersedePending(ctx context.Context, contractID, actorID uint, now time.Time) error {
+	pending, err := s.repo.FindPendingByContract(ctx, contractID)
+	if err != nil {
+		return err
+	}
+	for i := range pending {
+		updated, err := s.repo.UpdateStatusIfPending(ctx, pending[i].ID, models.AssignmentStatusSuperseded, now)
+		if err != nil {
+			return err
+		}
+		if updated {
+			s.audit(ctx, actorID, "SUPERSEDE", fmt.Sprintf("Asignación reemplazada para el contrato %d", contractID), pending[i].ID)
+		}
+	}
 	return nil
+}
+
+// History returns the assignment attempts of a contract, newest first.
+func (s *AssignmentService) History(ctx context.Context, contractID uint) ([]models.Assignment, error) {
+	return s.repo.FindByContract(ctx, contractID)
 }
 
 // PendingForSeller lists the active offers of one seller.
@@ -541,7 +572,7 @@ func (s *AssignmentService) notifyAssignmentAccepted(ctx context.Context, contra
 		return
 	}
 	message := fmt.Sprintf(
-		"Se te asignó una reserva por referido en %s, lote %s.",
+		"Se te asignó la reserva en %s, lote %s.",
 		contract.Lot.Project.Name, contract.Lot.Name,
 	)
 	logIgnoredError("notify assignment accepted", s.notificationSvc.NotifyUser(
