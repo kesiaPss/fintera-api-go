@@ -141,6 +141,40 @@
                 "responses": {}
             }
         },
+        "/assignments/backfill": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Offers an automatic seller to reservations that were created while no high/medium seller was available. Safe to run repeatedly.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Assignments"
+                ],
+                "summary": "Backfill unassigned automatic reservations",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Maximum reservations to process (default 50, max 200)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
         "/assignments/pending": {
             "get": {
                 "security": [

@@ -325,6 +325,10 @@ func setupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				// Job status (admin only)
 				admin.GET("/jobs/status", h.Job.Status)
 
+				// Recover reservations left without a seller when the automatic
+				// pool was empty (admin only).
+				admin.POST("/assignments/backfill", h.Assignment.BackfillUnassigned)
+
 				// Branding (admin only)
 				admin.PUT("/branding", h.Branding.Update)
 				admin.POST("/branding/logo", h.Branding.UploadLogo)

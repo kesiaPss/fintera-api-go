@@ -22,6 +22,8 @@ type AssignmentRepository interface {
 	UpdateStatusIfPending(ctx context.Context, id uint, status string, respondedAt time.Time) (bool, error)
 	ExpiredSellerIDsForContract(ctx context.Context, contractID uint) ([]uint, error)
 	ListAssignableSellers(ctx context.Context, excludeIDs []uint) ([]models.User, error)
+	ListActiveSellers(ctx context.Context, excludeIDs []uint) ([]models.User, error)
+	FindUnassignedAutomatic(ctx context.Context, limit int) ([]models.Contract, error)
 	PendingLoadBySellerIDs(ctx context.Context, sellerIDs []uint) (map[uint]int64, error)
 	LastAssignedAtBySellerIDs(ctx context.Context, sellerIDs []uint) (map[uint]*time.Time, error)
 	ScoreOutcomesSince(ctx context.Context, since time.Time) ([]models.ScoreOutcome, error)
@@ -174,6 +176,39 @@ func (r *assignmentRepository) ListAssignableSellers(ctx context.Context, exclud
 }
 
 // PendingLoadBySellerIDs returns how many active offers each seller holds.
+// ListActiveSellers returns every active seller regardless of score level. It
+// is the fallback pool for automatic assignment: keeping low performers out of
+// the primary pool is intentional, but excluding them entirely strands
+// reservations whenever nobody is high/medium.
+func (r *assignmentRepository) ListActiveSellers(ctx context.Context, excludeIDs []uint) ([]models.User, error) {
+	var sellers []models.User
+	db := r.db.WithContext(ctx).
+		Where("role = ? AND status = ? AND discarded_at IS NULL", models.RoleSeller, models.StatusActive)
+	if len(excludeIDs) > 0 {
+		db = db.Where("id NOT IN ?", excludeIDs)
+	}
+	err := db.Order("full_name ASC").Find(&sellers).Error
+	return sellers, err
+}
+
+// FindUnassignedAutomatic returns live reservations that should carry an
+// automatic seller but currently have none. Historical or manually reassigned
+// contracts are out of scope on purpose.
+func (r *assignmentRepository) FindUnassignedAutomatic(ctx context.Context, limit int) ([]models.Contract, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	var contracts []models.Contract
+	err := r.db.WithContext(ctx).
+		Where("seller_id IS NULL").
+		Where("assignment_origin IN ?", []string{models.AssignmentOriginAutomatic, ""}).
+		Where("status IN ?", []string{models.ContractStatusPending, models.ContractStatusSubmitted}).
+		Order("id ASC").
+		Limit(limit).
+		Find(&contracts).Error
+	return contracts, err
+}
+
 func (r *assignmentRepository) PendingLoadBySellerIDs(ctx context.Context, sellerIDs []uint) (map[uint]int64, error) {
 	loads := make(map[uint]int64, len(sellerIDs))
 	if len(sellerIDs) == 0 {

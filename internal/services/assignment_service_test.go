@@ -213,6 +213,94 @@ func TestApplyOnCreateLeavesReservationWithoutSellerWhenPoolEmpty(t *testing.T) 
 	}
 }
 
+func TestApplyOnCreateFallsBackToActiveSellerWhenPoolEmpty(t *testing.T) {
+	low := testSeller(7, models.ScoreLevelLow)
+	repo := newFakeAssignmentRepo()
+	repo.active = []models.User{*low}
+	service := newTestAssignmentService(repo, low)
+
+	contract := testContract(10)
+	contract.AssignmentOrigin = models.AssignmentOriginAutomatic
+	contract.AssignmentStatus = models.AssignmentStatusNone
+
+	if err := service.ApplyOnCreate(context.Background(), &contract, assignmentTestNow); err != nil {
+		t.Fatal(err)
+	}
+	if len(repo.assignments) != 1 {
+		t.Fatalf("assignments = %d", len(repo.assignments))
+	}
+	assignment := repo.assignments[1]
+	if assignment.SellerID != low.ID || assignment.Origin != models.AssignmentOriginAutomatic {
+		t.Fatalf("assignment = %+v", assignment)
+	}
+	if assignment.Status != models.AssignmentStatusPending {
+		t.Fatalf("status = %s", assignment.Status)
+	}
+}
+
+func TestApplyOnCreatePrefersAssignablePoolOverFallback(t *testing.T) {
+	high := testSeller(1, models.ScoreLevelHigh)
+	low := testSeller(2, models.ScoreLevelLow)
+	repo := newFakeAssignmentRepo()
+	repo.assignable = []models.User{*high}
+	repo.active = []models.User{*low, *high}
+	service := newTestAssignmentService(repo, high, low)
+
+	contract := testContract(10)
+	contract.AssignmentOrigin = models.AssignmentOriginAutomatic
+
+	if err := service.ApplyOnCreate(context.Background(), &contract, assignmentTestNow); err != nil {
+		t.Fatal(err)
+	}
+	if got := repo.assignments[1].SellerID; got != high.ID {
+		t.Fatalf("seller = %d, want %d", got, high.ID)
+	}
+}
+
+func TestBackfillUnassignedOffersSellersToOrphans(t *testing.T) {
+	low := testSeller(5, models.ScoreLevelLow)
+	repo := newFakeAssignmentRepo()
+	repo.active = []models.User{*low}
+	repo.orphans = []models.Contract{
+		{ID: 21, Status: models.ContractStatusSubmitted, AssignmentOrigin: models.AssignmentOriginAutomatic},
+		{ID: 22, Status: models.ContractStatusPending, AssignmentOrigin: models.AssignmentOriginAutomatic},
+	}
+	service := newTestAssignmentService(repo, low)
+
+	assigned, err := service.BackfillUnassigned(context.Background(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if assigned != 2 {
+		t.Fatalf("assigned = %d", assigned)
+	}
+	if len(repo.assignments) != 2 {
+		t.Fatalf("assignments = %d", len(repo.assignments))
+	}
+	for index := range repo.orphans {
+		contract := repo.orphans[index]
+		if contract.SellerID == nil || *contract.SellerID != low.ID {
+			t.Fatalf("contract %d seller = %v", contract.ID, contract.SellerID)
+		}
+	}
+}
+
+func TestBackfillUnassignedSkipsReservationsWhenNobodyIsActive(t *testing.T) {
+	repo := newFakeAssignmentRepo()
+	repo.orphans = []models.Contract{
+		{ID: 21, Status: models.ContractStatusSubmitted, AssignmentOrigin: models.AssignmentOriginAutomatic},
+	}
+	service := newTestAssignmentService(repo)
+
+	assigned, err := service.BackfillUnassigned(context.Background(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if assigned != 0 || len(repo.assignments) != 0 {
+		t.Fatalf("assigned = %d, assignments = %d", assigned, len(repo.assignments))
+	}
+}
+
 func TestApplyOnCreateReferralCreatesAcceptedAssignment(t *testing.T) {
 	seller := testSeller(1, models.ScoreLevelHigh)
 	repo := newFakeAssignmentRepo()

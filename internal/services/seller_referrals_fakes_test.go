@@ -204,6 +204,8 @@ type fakeAssignmentRepo struct {
 	assignments     map[uint]*models.Assignment
 	nextID          uint
 	assignable      []models.User
+	active          []models.User
+	orphans         []models.Contract
 	loads           map[uint]int64
 	last            map[uint]*time.Time
 	contractUpdates []contractAssignmentUpdateRecord
@@ -343,6 +345,27 @@ func (r *fakeAssignmentRepo) ListAssignableSellers(_ context.Context, excludeIDs
 		}
 	}
 	return result, nil
+}
+
+func (r *fakeAssignmentRepo) ListActiveSellers(_ context.Context, excludeIDs []uint) ([]models.User, error) {
+	excluded := make(map[uint]bool, len(excludeIDs))
+	for _, id := range excludeIDs {
+		excluded[id] = true
+	}
+	result := make([]models.User, 0, len(r.active))
+	for _, seller := range r.active {
+		if !excluded[seller.ID] {
+			result = append(result, seller)
+		}
+	}
+	return result, nil
+}
+
+func (r *fakeAssignmentRepo) FindUnassignedAutomatic(_ context.Context, limit int) ([]models.Contract, error) {
+	if limit > 0 && len(r.orphans) > limit {
+		return r.orphans[:limit], nil
+	}
+	return r.orphans, nil
 }
 
 func (r *fakeAssignmentRepo) PendingLoadBySellerIDs(_ context.Context, ids []uint) (map[uint]int64, error) {

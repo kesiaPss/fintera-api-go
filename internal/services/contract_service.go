@@ -223,12 +223,12 @@ func (s *ContractService) Reassign(ctx context.Context, guid string, input Contr
 		if input.ExcludeCurrent && contract.SellerID != nil {
 			exclude = append(exclude, *contract.SellerID)
 		}
-		seller, err = s.assignmentSvc.SelectSeller(ctx, contract.ID, exclude)
+		seller, _, err = s.assignmentSvc.chooseAutomaticSeller(ctx, contract.ID, exclude)
 		if err != nil {
 			return nil, nil, err
 		}
 		if seller == nil && len(exclude) > 0 {
-			seller, err = s.assignmentSvc.SelectSeller(ctx, contract.ID, nil)
+			seller, _, err = s.assignmentSvc.chooseAutomaticSeller(ctx, contract.ID, nil)
 			if err != nil {
 				return nil, nil, err
 			}
