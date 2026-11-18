@@ -167,13 +167,50 @@ PDF. Sellers are always scoped to their own operations; admins see everything.
 | Path | Report | Filters |
 | --- | --- | --- |
 | `/reports/operations_export` | Monthly operations summary for accounting | `project_id`, `start_date`, `end_date` |
-| `/reports/commissions_export` | Commissions grouped by seller (paid/pending, credits, net pending) | `start_date`, `end_date` |
+| `/reports/commissions_export` | Commissions grouped by seller (paid/pending, credits, net pending) | `start_date`, `end_date`, `seller_id` |
 | `/reports/overdue_export` | Overdue payments with 1-30/31-60/61-90/90+ aging buckets (cancelled contracts excluded) | none |
 | `/reports/income_flow_export` | Monthly income flow: actual vs projected collections per month/project | `project_id`, `start_date`, `end_date` |
 
 Dates accept `AAAA-MM-DD` or RFC3339. When both dates are omitted on the
 operations and income-flow exports, the period defaults to the current calendar
 month; commissions keeps all periods and overdue is a current snapshot.
+
+On `/reports/commissions_export`, admins may pass `seller_id` to limit the whole
+export (commissions, credits and net pending) to one seller; an invalid value or
+`0` returns `400` with `{"error": "seller_id inválido"}`. Non-admin users ignore
+`seller_id` and always export their own operations.
+
+#### Commissions list (`GET /reports/commissions`)
+
+Returns one page of commissions and one page of seller credits. Pages hold at
+most 20 rows: `per_page` and `credits_per_page` default to 20 and values above 20
+are capped at 20. `page` and `credits_page` below 1 are treated as 1, and a page
+past the end returns an empty list with correct pagination metadata.
+
+| Query parameter | Meaning |
+| --- | --- |
+| `start_date`, `end_date` | Commission period (`AAAA-MM-DD`) |
+| `seller_id` | Admin only: commissions of this seller id. Rows without a seller id are excluded when set. Credits are filtered by the same id. Invalid values or `0` return `400`. For non-admin users the parameter is ignored: the server always filters by the authenticated user's id, so sellers never receive other sellers' rows or credits. |
+| `search` | Case-insensitive substring on `client_name`, `project`, `lot`, `seller` and the contract id with or without `#` (`#43` and `43` both find contract 43); it also matches `historical_sale_id`. Blank or whitespace-only values do not filter. It only narrows `commissions` and `pagination.total` / `total_pages`. |
+| `page`, `per_page` | Commission page and page size (max 20) |
+| `credits_page`, `credits_per_page` | Credit page and page size (max 20) |
+
+Response keys:
+
+| Key | Content |
+| --- | --- |
+| `commissions` | The requested page of commission rows, after `search` |
+| `pagination` | `page`, `per_page`, `total`, `total_pages` for the searched commissions, plus `period_total`: the commissions of the period before applying `search` |
+| `totals` | `commission`, `amount`, `paid`, `pending`, `paid_count`, `average_rate` (`commission / amount * 100`, `0` when amount is 0), `net_pending` over the full filtered period, not the page and not affected by `search` |
+| `sellers` | `id` and `name` of every seller with commissions in the period, sorted by name, built before the `seller_id` and `search` filters |
+| `credits` | The requested page of seller commission credits |
+| `credits_pagination` | `page`, `per_page`, `total`, `total_pages` for the credits |
+| `pending_credits` | Pending total over all credits (not only the page); not affected by `search` |
+| `net_pending` | Same value as `totals.net_pending`, kept for compatibility; not affected by `search` |
+
+The totals are computed in Go after the full set is built, so the request still
+loads every contract in the period; only the response size shrinks. `search`
+keeps the dashboard KPIs stable while the seller narrows the visible rows.
 
 **Migración de endpoints eliminados**
 

@@ -28,6 +28,7 @@ func NewReportExportHandler(exportSvc *services.ReportExportService) *ReportExpo
 var (
 	errReportExportFormat    = errors.New("el parámetro format es obligatorio: use xlsx, csv o pdf")
 	errReportExportProjectID = errors.New("project_id inválido")
+	errReportExportSellerID  = errors.New("seller_id inválido")
 	errReportExportDate      = errors.New("fecha inválida, use AAAA-MM-DD")
 )
 
@@ -52,7 +53,7 @@ func (h *ReportExportHandler) Operations(c *gin.Context) {
 		return
 	}
 
-	filters, err := parseReportExportFilters(c, true, true, time.Now())
+	filters, err := parseReportExportFilters(c, true, true, false, time.Now())
 	if err != nil {
 		writeReportExportBadRequest(c, err)
 		return
@@ -76,6 +77,7 @@ func (h *ReportExportHandler) Operations(c *gin.Context) {
 // @Param format query string true "Formato de exportación (xlsx, csv, pdf)"
 // @Param start_date query string false "Fecha inicial (AAAA-MM-DD o RFC3339). Sin valor, incluye todos los períodos"
 // @Param end_date query string false "Fecha final (AAAA-MM-DD o RFC3339). Sin valor, incluye todos los períodos"
+// @Param seller_id query int false "Admin only: limita el export a este vendedor id (comisiones, créditos y neto). Ignorado para vendedores, que siempre ven lo propio. Valor inválido o 0 responde 400"
 // @Success 200 {file} file "reporte_comisiones_<período>.<formato>"
 // @Failure 400 {object} map[string]string
 // @Failure 500 {object} map[string]string
@@ -87,8 +89,9 @@ func (h *ReportExportHandler) Commissions(c *gin.Context) {
 		return
 	}
 
-	// Commissions is grouped by seller and has no project filter.
-	filters, err := parseReportExportFilters(c, false, false, time.Now())
+	// Commissions is grouped by seller and has no project filter, but admins
+	// may narrow it to one seller.
+	filters, err := parseReportExportFilters(c, false, false, true, time.Now())
 	if err != nil {
 		writeReportExportBadRequest(c, err)
 		return
@@ -153,7 +156,7 @@ func (h *ReportExportHandler) IncomeFlow(c *gin.Context) {
 		return
 	}
 
-	filters, err := parseReportExportFilters(c, true, true, time.Now())
+	filters, err := parseReportExportFilters(c, true, true, false, time.Now())
 	if err != nil {
 		writeReportExportBadRequest(c, err)
 		return
@@ -192,6 +195,23 @@ func parseReportExportProjectID(c *gin.Context) (*uint, error) {
 
 	projectID := uint(parsed)
 	return &projectID, nil
+}
+
+// parseReportExportSellerID reads the optional seller_id filter. Only positive
+// integers are accepted; an invalid value or 0 is a validation error.
+func parseReportExportSellerID(c *gin.Context) (*uint, error) {
+	raw := strings.TrimSpace(c.Query("seller_id"))
+	if raw == "" {
+		return nil, nil
+	}
+
+	parsed, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil || parsed == 0 {
+		return nil, errReportExportSellerID
+	}
+
+	sellerID := uint(parsed)
+	return &sellerID, nil
 }
 
 // parseReportExportDate reads an optional date accepting AAAA-MM-DD (local) and
@@ -234,12 +254,13 @@ func reportExportScopeFilters(c *gin.Context) services.ReportExportFilters {
 }
 
 // parseReportExportFilters builds the shared report filters. Sellers are always
-// scoped to their own operations; admins see everything. When
-// defaultToCurrentMonth is set and both dates are missing (the monthly
-// operations and income-flow reports), the range defaults to the current
-// calendar month so those exports never load the entire history. applyProject
-// is false for reports that do not support a project filter.
-func parseReportExportFilters(c *gin.Context, defaultToCurrentMonth, applyProject bool, now time.Time) (services.ReportExportFilters, error) {
+// scoped to their own operations; admins see everything unless applySellerID is
+// set and they pass a seller_id, in which case the export is scoped to that
+// seller. When defaultToCurrentMonth is set and both dates are missing (the
+// monthly operations and income-flow reports), the range defaults to the
+// current calendar month so those exports never load the entire history.
+// applyProject is false for reports that do not support a project filter.
+func parseReportExportFilters(c *gin.Context, defaultToCurrentMonth, applyProject, applySellerID bool, now time.Time) (services.ReportExportFilters, error) {
 	filters := reportExportScopeFilters(c)
 
 	if applyProject {
@@ -248,6 +269,17 @@ func parseReportExportFilters(c *gin.Context, defaultToCurrentMonth, applyProjec
 			return filters, err
 		}
 		filters.ProjectID = projectID
+	}
+
+	if applySellerID && !filters.FilterBySeller {
+		sellerID, err := parseReportExportSellerID(c)
+		if err != nil {
+			return filters, err
+		}
+		if sellerID != nil {
+			filters.SellerID = *sellerID
+			filters.FilterBySeller = true
+		}
 	}
 
 	startDate, err := parseReportExportDate(c.Query("start_date"))
