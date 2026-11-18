@@ -64,24 +64,24 @@ func (s *EmailService) validateEmail(email string) error {
 
 // applyRecipientOverride redirects an outbound email to a test inbox when
 // EMAIL_OVERRIDE_TO is configured. It prefixes the subject with the original
-// recipients so test mail stays traceable, and returns them for logging.
+// recipients so test mail stays traceable, and returns the original recipients.
 // An empty override leaves the message untouched (production behavior).
-func applyRecipientOverride(params *resend.SendEmailRequest, overrideTo string) string {
+func applyRecipientOverride(params *resend.SendEmailRequest, overrideTo string) []string {
 	overrideTo = strings.TrimSpace(overrideTo)
 	if overrideTo == "" || params == nil || len(params.To) == 0 {
-		return ""
+		return nil
 	}
-	original := strings.Join(params.To, ", ")
+	original := append([]string(nil), params.To...)
 	params.To = []string{overrideTo}
-	params.Subject = fmt.Sprintf("[TEST → %s] %s", original, params.Subject)
+	params.Subject = fmt.Sprintf("[TEST → %s] %s", strings.Join(original, ", "), params.Subject)
 	return original
 }
 
 // sendEmail applies the optional test-recipient override and sends through
 // Resend. All email methods must go through this wrapper.
 func (s *EmailService) sendEmail(params *resend.SendEmailRequest) error {
-	if original := applyRecipientOverride(params, s.config.EmailOverrideTo); original != "" {
-		logger.Info(fmt.Sprintf("📧 [Email Redirect] %s → %s", original, s.config.EmailOverrideTo))
+	if original := applyRecipientOverride(params, s.config.EmailOverrideTo); original != nil {
+		logger.Info(fmt.Sprintf("📧 [Email Redirect] %s → %s", logger.MaskEmails(original), logger.MaskEmail(s.config.EmailOverrideTo)))
 	}
 	_, err := s.resendClient.Emails.Send(params)
 	return err
@@ -92,12 +92,12 @@ func (s *EmailService) sendEmail(params *resend.SendEmailRequest) error {
 // The caller should return the error if this returns false.
 func (s *EmailService) checkEmailPreconditions(user *models.User, operation string) (bool, error) {
 	if !s.config.EnableEmailNotifications {
-		logger.Info(fmt.Sprintf("🚫 [Email Disabled] Skipping %s to %s", operation, user.Email))
+		logger.Info(fmt.Sprintf("🚫 [Email Disabled] Skipping %s to %s", operation, logger.MaskEmail(user.Email)))
 		return false, nil
 	}
 
 	if err := s.ensureEmailConfigured(); err != nil {
-		logger.Error(fmt.Sprintf("Failed to send %s to %s: %v", operation, user.Email, err))
+		logger.Error(fmt.Sprintf("Failed to send %s to %s: %v", operation, logger.MaskEmail(user.Email), err))
 		return false, err
 	}
 	if err := s.validateEmail(user.Email); err != nil {
@@ -115,7 +115,7 @@ func (s *EmailService) checkEmailPreconditions(user *models.User, operation stri
 // using checkEmailPreconditions so they can never be silenced.
 func (s *EmailService) checkNotificationPreconditions(user *models.User, operation string) (bool, error) {
 	if !user.EmailNotifications {
-		logger.Info(fmt.Sprintf("🔕 [Notifications Disabled] Skipping %s to %s (user %d opted out)", operation, user.Email, user.ID))
+		logger.Info(fmt.Sprintf("🔕 [Notifications Disabled] Skipping %s to %s (user %d opted out)", operation, logger.MaskEmail(user.Email), user.ID))
 		return false, nil
 	}
 	return s.checkEmailPreconditions(user, operation)
@@ -152,11 +152,11 @@ func (s *EmailService) SendRecoveryCode(ctx context.Context, user *models.User, 
 	}
 	err = s.sendEmail(params)
 	if err != nil {
-		logger.Error(fmt.Sprintf("Failed to send email to %s: %v", user.Email, err))
+		logger.Error(fmt.Sprintf("Failed to send email to %s: %v", logger.MaskEmail(user.Email), err))
 		return err
 	}
 
-	logger.Info(fmt.Sprintf("📧 [Email Sent] To: %s | Subject: Código de reseteo | Code: %s", user.Email, code))
+	logger.Info(fmt.Sprintf("📧 [Email Sent] To: %s | Subject: Código de reseteo", logger.MaskEmail(user.Email)))
 
 	return nil
 }
@@ -192,15 +192,20 @@ func (s *EmailService) SendAccountCreated(ctx context.Context, user *models.User
 	}
 	err = s.sendEmail(params)
 	if err != nil {
-		logger.Error(fmt.Sprintf("Failed to send email to %s: %v", user.Email, err))
+		logger.Error(fmt.Sprintf("Failed to send email to %s: %v", logger.MaskEmail(user.Email), err))
 		return err
 	}
 
-	logger.Info(fmt.Sprintf("📧 [Email Sent] To: %s | Subject: ¡Bienvenido a Fintera!", user.Email))
+	logger.Info(fmt.Sprintf("📧 [Email Sent] To: %s | Subject: ¡Bienvenido a Fintera!", logger.MaskEmail(user.Email)))
 	return nil
 }
 
 func (s *EmailService) SendContractSubmitted(ctx context.Context, contract *models.Contract) error {
+	if contract.ApplicantUser.ID == 0 {
+		logger.Warn("skipping contract submitted email: applicant not loaded",
+			"contract_id", contract.ID, "applicant_user_id", contract.ApplicantUserID, "reason", "unresolved_recipient")
+		return nil
+	}
 	if ok, err := s.checkNotificationPreconditions(&contract.ApplicantUser, "contract submitted email"); !ok {
 		return err
 	}
@@ -254,11 +259,11 @@ func (s *EmailService) SendContractSubmitted(ctx context.Context, contract *mode
 	}
 	err = s.sendEmail(params)
 	if err != nil {
-		logger.Error(fmt.Sprintf("Failed to send email to %s: %v", contract.ApplicantUser.Email, err))
+		logger.Error(fmt.Sprintf("Failed to send email to %s: %v", logger.MaskEmail(contract.ApplicantUser.Email), err))
 		return err
 	}
 
-	logger.Info(fmt.Sprintf("📧 [Email Sent] To: %s | Subject: Contrato Creado", contract.ApplicantUser.Email))
+	logger.Info(fmt.Sprintf("📧 [Email Sent] To: %s | Subject: Contrato Creado", logger.MaskEmail(contract.ApplicantUser.Email)))
 	return nil
 }
 
@@ -305,11 +310,11 @@ func (s *EmailService) SendReservationVoucherReminder(ctx context.Context, contr
 	}
 	err = s.sendEmail(params)
 	if err != nil {
-		logger.Error(fmt.Sprintf("Failed to send email to %s: %v", contract.ApplicantUser.Email, err))
+		logger.Error(fmt.Sprintf("Failed to send email to %s: %v", logger.MaskEmail(contract.ApplicantUser.Email), err))
 		return err
 	}
 
-	logger.Info(fmt.Sprintf("📧 [Email Sent] To: %s | Subject: Tu reserva está por vencer", contract.ApplicantUser.Email))
+	logger.Info(fmt.Sprintf("📧 [Email Sent] To: %s | Subject: Tu reserva está por vencer", logger.MaskEmail(contract.ApplicantUser.Email)))
 	return nil
 }
 
@@ -373,11 +378,11 @@ func (s *EmailService) SendContractApproved(ctx context.Context, contract *model
 	}
 	err = s.sendEmail(params)
 	if err != nil {
-		logger.Error(fmt.Sprintf("Failed to send email to %s: %v", contract.ApplicantUser.Email, err))
+		logger.Error(fmt.Sprintf("Failed to send email to %s: %v", logger.MaskEmail(contract.ApplicantUser.Email), err))
 		return err
 	}
 
-	logger.Info(fmt.Sprintf("📧 [Email Sent] To: %s | Subject: Contrato Aprobado", contract.ApplicantUser.Email))
+	logger.Info(fmt.Sprintf("📧 [Email Sent] To: %s | Subject: Contrato Aprobado", logger.MaskEmail(contract.ApplicantUser.Email)))
 	return nil
 }
 
@@ -427,10 +432,10 @@ func (s *EmailService) SendContractRejected(ctx context.Context, contract *model
 	}
 	err = s.sendEmail(params)
 	if err != nil {
-		logger.Error(fmt.Sprintf("Failed to send email to %s: %v", contract.ApplicantUser.Email, err))
+		logger.Error(fmt.Sprintf("Failed to send email to %s: %v", logger.MaskEmail(contract.ApplicantUser.Email), err))
 		return err
 	}
-	logger.Info(fmt.Sprintf("📧 [Email Sent] To: %s | Subject: Contrato rechazado", contract.ApplicantUser.Email))
+	logger.Info(fmt.Sprintf("📧 [Email Sent] To: %s | Subject: Contrato rechazado", logger.MaskEmail(contract.ApplicantUser.Email)))
 	return nil
 }
 
@@ -494,11 +499,11 @@ func (s *EmailService) SendPaymentApproved(ctx context.Context, payment *models.
 	}
 	err = s.sendEmail(params)
 	if err != nil {
-		logger.Error(fmt.Sprintf("Failed to send email to %s: %v", payment.Contract.ApplicantUser.Email, err))
+		logger.Error(fmt.Sprintf("Failed to send email to %s: %v", logger.MaskEmail(payment.Contract.ApplicantUser.Email), err))
 		return err
 	}
 
-	logger.Info(fmt.Sprintf("📧 [Email Sent] To: %s | Subject: Pago Aprobado", payment.Contract.ApplicantUser.Email))
+	logger.Info(fmt.Sprintf("📧 [Email Sent] To: %s | Subject: Pago Aprobado", logger.MaskEmail(payment.Contract.ApplicantUser.Email)))
 	return nil
 }
 
@@ -538,11 +543,11 @@ func (s *EmailService) SendPaymentRejected(ctx context.Context, contract *models
 	}
 	err = s.sendEmail(params)
 	if err != nil {
-		logger.Error(fmt.Sprintf("Failed to send email to %s: %v", contract.ApplicantUser.Email, err))
+		logger.Error(fmt.Sprintf("Failed to send email to %s: %v", logger.MaskEmail(contract.ApplicantUser.Email), err))
 		return err
 	}
 
-	logger.Info(fmt.Sprintf("📧 [Email Sent] To: %s | Subject: Pago Rechazado", contract.ApplicantUser.Email))
+	logger.Info(fmt.Sprintf("📧 [Email Sent] To: %s | Subject: Pago Rechazado", logger.MaskEmail(contract.ApplicantUser.Email)))
 	return nil
 }
 
@@ -590,11 +595,11 @@ func (s *EmailService) SendOverduePayments(ctx context.Context, user *models.Use
 	}
 	err = s.sendEmail(params)
 	if err != nil {
-		logger.Error(fmt.Sprintf("Failed to send email to %s: %v", user.Email, err))
+		logger.Error(fmt.Sprintf("Failed to send email to %s: %v", logger.MaskEmail(user.Email), err))
 		return err
 	}
 
-	logger.Info(fmt.Sprintf("📧 [Email Sent] To: %s | Subject: Pagos Vencidos (%d pagos)", user.Email, len(payments)))
+	logger.Info(fmt.Sprintf("📧 [Email Sent] To: %s | Subject: Pagos Vencidos (%d pagos)", logger.MaskEmail(user.Email), len(payments)))
 	return nil
 }
 
@@ -641,11 +646,11 @@ func (s *EmailService) SendUpcomingPayments(ctx context.Context, user *models.Us
 	}
 	err = s.sendEmail(params)
 	if err != nil {
-		logger.Error(fmt.Sprintf("Failed to send email to %s: %v", user.Email, err))
+		logger.Error(fmt.Sprintf("Failed to send email to %s: %v", logger.MaskEmail(user.Email), err))
 		return err
 	}
 
-	logger.Info(fmt.Sprintf("📧 [Email Sent] To: %s | Subject: %s", user.Email, subject))
+	logger.Info(fmt.Sprintf("📧 [Email Sent] To: %s | Subject: %s", logger.MaskEmail(user.Email), subject))
 	return nil
 }
 
@@ -691,11 +696,11 @@ func (s *EmailService) SendReservationApproved(ctx context.Context, contract *mo
 	}
 	err = s.sendEmail(params)
 	if err != nil {
-		logger.Error(fmt.Sprintf("Failed to send email to %s: %v", contract.ApplicantUser.Email, err))
+		logger.Error(fmt.Sprintf("Failed to send email to %s: %v", logger.MaskEmail(contract.ApplicantUser.Email), err))
 		return err
 	}
 
-	logger.Info(fmt.Sprintf("📧 [Email Sent] To: %s | Subject: Reserva Aprobada", contract.ApplicantUser.Email))
+	logger.Info(fmt.Sprintf("📧 [Email Sent] To: %s | Subject: Reserva Aprobada", logger.MaskEmail(contract.ApplicantUser.Email)))
 	return nil
 }
 

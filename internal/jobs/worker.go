@@ -18,6 +18,8 @@ type Job func(ctx context.Context) error
 type Worker struct {
 	ctx           context.Context
 	cancel        context.CancelFunc
+	stopCtx       context.Context
+	stopScheduler context.CancelFunc
 	wg            sync.WaitGroup
 	queue         chan Job
 	asyncSem      chan struct{}
@@ -40,6 +42,7 @@ type WorkerStats struct {
 // NewWorker creates a worker with N concurrent processors
 func NewWorker(numWorkers int) *Worker {
 	ctx, cancel := context.WithCancel(context.Background())
+	stopCtx, stopScheduler := context.WithCancel(context.Background())
 	// Allow 2x workers for async jobs
 	asyncLimit := numWorkers * 2
 	if asyncLimit < 10 {
@@ -49,6 +52,8 @@ func NewWorker(numWorkers int) *Worker {
 	w := &Worker{
 		ctx:           ctx,
 		cancel:        cancel,
+		stopCtx:       stopCtx,
+		stopScheduler: stopScheduler,
 		queue:         make(chan Job, 100),
 		asyncSem:      make(chan struct{}, asyncLimit),
 		maxConcurrent: asyncLimit,
@@ -124,29 +129,24 @@ func (w *Worker) execute(job Job) (err error) {
 // process handles jobs from the queue
 func (w *Worker) process(workerID int) {
 	defer w.wg.Done()
-	for {
-		select {
-		case <-w.ctx.Done():
+	for job := range w.queue {
+		if w.ctx.Err() != nil {
 			return
-		case job, ok := <-w.queue:
-			if !ok {
-				return
-			}
-			w.trackJobStart()
-			start := time.Now()
-			if err := w.execute(job); err != nil {
-				logger.Error(fmt.Sprintf("[Worker %d] Job error: %v", workerID, err))
-				w.trackJobFailure()
-			} else {
-				logger.Info(fmt.Sprintf("[Worker %d] Job completed in %v", workerID, time.Since(start)))
-			}
-			w.trackJobEnd()
 		}
+		w.trackJobStart()
+		start := time.Now()
+		if err := w.execute(job); err != nil {
+			logger.Error(fmt.Sprintf("[Worker %d] Job error: %v", workerID, err))
+			w.trackJobFailure()
+		} else {
+			logger.Info(fmt.Sprintf("[Worker %d] Job completed in %v", workerID, time.Since(start)))
+		}
+		w.trackJobEnd()
 	}
 }
 
 // ScheduleEvery runs a job at fixed intervals. The first run happens after the interval (not at startup).
-func (w *Worker) ScheduleEvery(interval time.Duration, job Job) {
+func (w *Worker) ScheduleEvery(name string, interval time.Duration, job Job) {
 	w.wg.Add(1)
 	go func() {
 		defer w.wg.Done()
@@ -155,10 +155,10 @@ func (w *Worker) ScheduleEvery(interval time.Duration, job Job) {
 
 		for {
 			select {
-			case <-w.ctx.Done():
+			case <-w.stopCtx.Done():
 				return
 			case <-ticker.C:
-				w.runScheduledJob(job)
+				w.runScheduledJob(name, job)
 			}
 		}
 	}()
@@ -166,33 +166,37 @@ func (w *Worker) ScheduleEvery(interval time.Duration, job Job) {
 
 // ScheduleEveryImmediate runs a job once at startup, then at fixed intervals. Use this when the process
 // may restart (e.g. Railway deploys) so jobs run soon after start instead of waiting for the first interval.
-func (w *Worker) ScheduleEveryImmediate(interval time.Duration, job Job) {
+func (w *Worker) ScheduleEveryImmediate(name string, interval time.Duration, job Job) {
 	w.wg.Add(1)
 	go func() {
 		defer w.wg.Done()
-		w.runScheduledJob(job)
+		w.runScheduledJob(name, job)
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
 		for {
 			select {
-			case <-w.ctx.Done():
+			case <-w.stopCtx.Done():
 				return
 			case <-ticker.C:
-				w.runScheduledJob(job)
+				w.runScheduledJob(name, job)
 			}
 		}
 	}()
 }
 
-func (w *Worker) runScheduledJob(job Job) {
+func durationMs(start time.Time) float64 {
+	return float64(time.Since(start)) / float64(time.Millisecond)
+}
+
+func (w *Worker) runScheduledJob(name string, job Job) {
 	w.trackJobStart()
 	start := time.Now()
 	if err := w.execute(job); err != nil {
-		logger.Error(fmt.Sprintf("[Scheduler] Job error: %v", err))
+		logger.Error("Scheduled job failed", "job", name, "durationMs", durationMs(start), "error", err)
 		w.trackJobFailure()
 	} else {
-		logger.Info(fmt.Sprintf("[Scheduler] Job completed in %v", time.Since(start)))
+		logger.Debug("Scheduled job completed", "job", name, "durationMs", durationMs(start))
 	}
 	w.trackJobEnd()
 }
@@ -206,7 +210,7 @@ func (w *Worker) ScheduleAt(at time.Time, job Job) {
 		defer timer.Stop()
 
 		select {
-		case <-w.ctx.Done():
+		case <-w.stopCtx.Done():
 			return
 		case <-timer.C:
 			w.trackJobStart()
@@ -219,18 +223,34 @@ func (w *Worker) ScheduleAt(at time.Time, job Job) {
 	}()
 }
 
-// Shutdown gracefully stops all workers
-func (w *Worker) Shutdown() {
+// Shutdown stops scheduling, lets queued and running jobs finish, and waits for
+// them until ctx is done. When ctx ends first, running jobs are cancelled and
+// ctx.Err() is returned.
+func (w *Worker) Shutdown(ctx context.Context) error {
 	w.mu.Lock()
 	if w.closed {
 		w.mu.Unlock()
-		return
+		return nil
 	}
 	w.closed = true
-	w.cancel()
+	w.stopScheduler()
 	close(w.queue)
 	w.mu.Unlock()
-	w.wg.Wait()
+
+	done := make(chan struct{})
+	go func() {
+		w.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		w.cancel()
+		return nil
+	case <-ctx.Done():
+		w.cancel()
+		return ctx.Err()
+	}
 }
 
 // Context returns the worker's context for checking cancellation

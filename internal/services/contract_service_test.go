@@ -415,6 +415,8 @@ func TestContractService_Create(t *testing.T) {
 	assert.NotEmpty(t, contract.GUID)
 	assert.Equal(t, 10000.0, *contract.Amount)
 	assert.Equal(t, -10000.0, *contract.Balance)
+	assert.Equal(t, uint(2), contract.ApplicantUser.ID, "applicant must be attached for the submitted email")
+	assert.Equal(t, "Test User", contract.ApplicantUser.FullName)
 
 	mockLotRepo.AssertExpectations(t)
 	mockContractRepo.AssertExpectations(t)
@@ -436,7 +438,7 @@ func TestContractService_CreateWithAssignmentUsesReferralGUID(t *testing.T) {
 
 	auditSvc := NewAuditService(gdb)
 	worker := jobs.NewWorker(1)
-	t.Cleanup(worker.Shutdown)
+	t.Cleanup(func() { _ = worker.Shutdown(context.Background()) })
 
 	service := NewContractService(
 		contractRepo,
@@ -883,7 +885,7 @@ func newContractServiceForActions(t *testing.T) (*ContractService, *mockContract
 	gdb, mockSQL := setupMockDB(t)
 	auditSvc := NewAuditService(gdb)
 	worker := jobs.NewWorker(1)
-	t.Cleanup(worker.Shutdown)
+	t.Cleanup(func() { _ = worker.Shutdown(context.Background()) })
 
 	emailSvc := NewEmailService(&config.Config{EnableEmailNotifications: false})
 	notificationSvc := NewNotificationService(nil, nil)

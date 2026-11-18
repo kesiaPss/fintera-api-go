@@ -507,6 +507,7 @@ func (s *ContractService) Create(ctx context.Context, contract *models.Contract)
 	if err != nil {
 		return fmt.Errorf("failed to retrieve applicant: %w", err)
 	}
+	contract.ApplicantUser = *applicant
 
 	// Notify admins asynchronously
 	notificationMsg := fmt.Sprintf("Se ha recibido una nueva solicitud de contrato\nProyecto: %s\nLote: %s\nSolicitante: %s",

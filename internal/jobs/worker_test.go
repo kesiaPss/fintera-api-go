@@ -3,15 +3,17 @@ package jobs
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestExecuteRecoversStringPanic(t *testing.T) {
 	w := NewWorker(1)
-	defer w.Shutdown()
+	defer func() { _ = w.Shutdown(context.Background()) }()
 
 	err := w.execute(func(context.Context) error {
 		panic("boom")
@@ -23,7 +25,7 @@ func TestExecuteRecoversStringPanic(t *testing.T) {
 
 func TestExecutePreservesErrorPanic(t *testing.T) {
 	w := NewWorker(1)
-	defer w.Shutdown()
+	defer func() { _ = w.Shutdown(context.Background()) }()
 
 	sentinel := errors.New("kaboom")
 	err := w.execute(func(context.Context) error {
@@ -35,7 +37,7 @@ func TestExecutePreservesErrorPanic(t *testing.T) {
 
 func TestExecuteReturnsJobError(t *testing.T) {
 	w := NewWorker(1)
-	defer w.Shutdown()
+	defer func() { _ = w.Shutdown(context.Background()) }()
 
 	sentinel := errors.New("job failed")
 	err := w.execute(func(context.Context) error {
@@ -47,7 +49,7 @@ func TestExecuteReturnsJobError(t *testing.T) {
 
 func TestEnqueueAsyncSurvivesPanicAndTracksFailure(t *testing.T) {
 	w := NewWorker(1)
-	defer w.Shutdown()
+	defer func() { _ = w.Shutdown(context.Background()) }()
 
 	started := make(chan struct{})
 	w.EnqueueAsync(func(context.Context) error {
@@ -68,10 +70,10 @@ func TestEnqueueAsyncSurvivesPanicAndTracksFailure(t *testing.T) {
 
 func TestScheduledJobSurvivesPanic(t *testing.T) {
 	w := NewWorker(1)
-	defer w.Shutdown()
+	defer func() { _ = w.Shutdown(context.Background()) }()
 
 	started := make(chan struct{})
-	w.ScheduleEveryImmediate(time.Hour, func(context.Context) error {
+	w.ScheduleEveryImmediate("test", time.Hour, func(context.Context) error {
 		close(started)
 		panic("scheduled boom")
 	})
@@ -85,4 +87,70 @@ func TestScheduledJobSurvivesPanic(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return w.GetStats().FailedJobs == 1
 	}, 2*time.Second, 10*time.Millisecond)
+}
+
+func TestShutdownWaitsForRunningJobsWithinTimeout(t *testing.T) {
+	w := NewWorker(1)
+
+	finished := make(chan struct{})
+	w.EnqueueAsync(func(context.Context) error {
+		time.Sleep(50 * time.Millisecond)
+		close(finished)
+		return nil
+	})
+	time.Sleep(10 * time.Millisecond)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	require.NoError(t, w.Shutdown(ctx))
+
+	select {
+	case <-finished:
+	default:
+		t.Fatal("running job did not finish before Shutdown returned")
+	}
+}
+
+func TestShutdownCancelsJobsAfterTimeout(t *testing.T) {
+	w := NewWorker(1)
+
+	cancelled := make(chan struct{})
+	started := make(chan struct{})
+	w.EnqueueAsync(func(ctx context.Context) error {
+		close(started)
+		<-ctx.Done()
+		close(cancelled)
+		return ctx.Err()
+	})
+	<-started
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	err := w.Shutdown(ctx)
+
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	select {
+	case <-cancelled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("job context was not cancelled after the shutdown timeout")
+	}
+}
+
+func TestShutdownStopsScheduledRuns(t *testing.T) {
+	w := NewWorker(1)
+
+	var runs atomic.Int32
+	w.ScheduleEvery("test", 5*time.Millisecond, func(context.Context) error {
+		runs.Add(1)
+		return nil
+	})
+	require.Eventually(t, func() bool { return runs.Load() >= 2 }, 2*time.Second, 5*time.Millisecond)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	require.NoError(t, w.Shutdown(ctx))
+
+	stopped := runs.Load()
+	time.Sleep(30 * time.Millisecond)
+	assert.Equal(t, stopped, runs.Load())
 }

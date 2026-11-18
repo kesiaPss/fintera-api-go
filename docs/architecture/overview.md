@@ -83,7 +83,8 @@ cmd/api → handlers → services → repository → models
 10. `handlers.NewHandlers(...)` creates HTTP handlers.
 11. `setupRouter(...)` registers middleware and all routes.
 12. A graceful HTTP server starts and waits for `SIGINT`/`SIGTERM`.
-13. On shutdown: HTTP server, worker, then Rollbar flush. Fatal startup errors
+13. On shutdown: HTTP server, worker, database pool, then Rollbar flush, all
+    sharing one 30-second budget. Fatal startup errors
     (database, storage, server bind) also flush Rollbar before `os.Exit`.
 
 ## Request lifecycle
@@ -129,8 +130,11 @@ cmd/api → handlers → services → repository → models
 
 - **Logging:** `pkg/logger` wraps `log/slog`. Deployed environments emit JSON so
   `level`/`severity` is machine-readable; text output is opt-in with
-  `LOG_FORMAT=text`. GORM logging is wired through `pkg/logger/gorm.go`; cache
-  misses (`gorm.ErrRecordNotFound`) are logged at debug level, not as SQL errors.
+  `LOG_FORMAT=text`; `LOG_LEVEL` sets verbosity. Each request gets an
+  `X-Request-ID` (propagated or generated) that appears in the request log. GORM
+  logging is wired through `pkg/logger/gorm.go`: bind values are never logged,
+  routine SQL is debug, and cache misses (`gorm.ErrRecordNotFound`) are logged at
+  debug level, not as SQL errors.
 - **Errors:** Handlers usually return `{"error": "<message>"}`. Many
   user-facing messages are Spanish. Service sentinel errors live in
   `internal/services/errors.go`.

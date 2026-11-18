@@ -14,9 +14,18 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+// AnalyticsCacheEntry is one cache row written by SetCacheEntries.
+type AnalyticsCacheEntry struct {
+	Key       string
+	ProjectID *uint
+	Data      interface{}
+	TTL       time.Duration
+}
+
 type AnalyticsRepository interface {
 	GetCache(ctx context.Context, key string, projectID *uint) (*models.AnalyticsCache, error)
 	SetCache(ctx context.Context, key string, projectID *uint, data interface{}, ttl time.Duration) error
+	SetCacheEntries(ctx context.Context, entries []AnalyticsCacheEntry) error
 	InvalidateCache(ctx context.Context, key string, projectID *uint) error
 	CleanExpiredCache(ctx context.Context) error
 
@@ -75,38 +84,66 @@ func (r *analyticsRepository) GetCache(ctx context.Context, key string, projectI
 }
 
 func (r *analyticsRepository) SetCache(ctx context.Context, key string, projectID *uint, data interface{}, ttl time.Duration) error {
-	jsonData, err := json.Marshal(data)
-	if err != nil {
-		return err
+	return r.SetCacheEntries(ctx, []AnalyticsCacheEntry{{Key: key, ProjectID: projectID, Data: data, TTL: ttl}})
+}
+
+// SetCacheEntries writes every entry with at most two upserts, one for
+// project-scoped rows and one for global rows, because Postgres allows a single
+// conflict target per statement. The upserts keep concurrent refreshes from
+// inserting duplicates. Global entries have a NULL project_id, which needs the
+// partial unique index and an explicit target predicate.
+func (r *analyticsRepository) SetCacheEntries(ctx context.Context, entries []AnalyticsCacheEntry) error {
+	if len(entries) == 0 {
+		return nil
 	}
 
-	cache := models.AnalyticsCache{
-		CacheKey:  key,
-		ProjectID: projectID,
-		Data:      jsonData,
-		ExpiresAt: time.Now().Add(ttl),
+	now := time.Now()
+	var scoped, global []models.AnalyticsCache
+	for _, entry := range entries {
+		jsonData, err := json.Marshal(entry.Data)
+		if err != nil {
+			return err
+		}
+		row := models.AnalyticsCache{
+			CacheKey:  entry.Key,
+			ProjectID: entry.ProjectID,
+			Data:      jsonData,
+			ExpiresAt: now.Add(entry.TTL),
+		}
+		if entry.ProjectID != nil {
+			scoped = append(scoped, row)
+		} else {
+			global = append(global, row)
+		}
 	}
 
-	// A single upsert keeps concurrent refreshes from inserting duplicates. The
-	// global entry has a NULL project_id, which needs the partial unique index
-	// and an explicit target predicate.
-	conflict := clause.OnConflict{
-		Columns: []clause.Column{{Name: "cache_key"}},
-		DoUpdates: clause.Assignments(map[string]interface{}{
-			"data":       jsonData,
-			"expires_at": cache.ExpiresAt,
-			"updated_at": time.Now(),
-		}),
-	}
-	if projectID != nil {
-		conflict.Columns = []clause.Column{{Name: "cache_key"}, {Name: "project_id"}}
-	} else {
-		conflict.TargetWhere = clause.Where{Exprs: []clause.Expression{
-			clause.Expr{SQL: "project_id IS NULL"},
-		}}
+	update := clause.AssignmentColumns([]string{"data", "expires_at", "updated_at"})
+	db := r.db.WithContext(ctx)
+
+	if len(scoped) > 0 {
+		conflict := clause.OnConflict{
+			Columns:   []clause.Column{{Name: "cache_key"}, {Name: "project_id"}},
+			DoUpdates: update,
+		}
+		if err := db.Clauses(conflict).Create(&scoped).Error; err != nil {
+			return err
+		}
 	}
 
-	return r.db.WithContext(ctx).Clauses(conflict).Create(&cache).Error
+	if len(global) > 0 {
+		conflict := clause.OnConflict{
+			Columns: []clause.Column{{Name: "cache_key"}},
+			TargetWhere: clause.Where{Exprs: []clause.Expression{
+				clause.Expr{SQL: "project_id IS NULL"},
+			}},
+			DoUpdates: update,
+		}
+		if err := db.Clauses(conflict).Create(&global).Error; err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (r *analyticsRepository) InvalidateCache(ctx context.Context, key string, projectID *uint) error {

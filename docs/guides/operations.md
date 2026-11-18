@@ -86,7 +86,28 @@ scheduler.
 ## Observability
 
 - **Logs:** structured `slog`. JSON in production, text elsewhere, written to
-  stdout.
+  stdout. `LOG_FORMAT=text` forces text; `LOG_LEVEL` (default `info`) controls
+  verbosity.
+- **Request logs** (`Incoming request`) carry `requestId`, `method`, `route`
+  (Gin route template, e.g. `/api/v1/projects/:project_id`), `status`,
+  `durationMs`, `ip`, `user_agent`, and `user_id` when authenticated. The raw
+  path and query string are not logged. The `X-Request-ID` request header is
+  kept when it is 1–128 letters, digits, `.`, `_`, or `-`; otherwise a new ID is
+  generated. The ID is returned in the `X-Request-ID` response header, so it can
+  be matched with proxy access logs. 5xx logs at error, 4xx at warn.
+- **SQL logs:** `Slow SQL` (above 200 ms) and `SQL Error` lines include the
+  duration in the message and the parameterized query in `sql` (`$1`, `$2`
+  placeholders; bind values are never logged), plus `durationMs` and `rows`.
+  Routine statements log at `debug`; use `LOG_LEVEL=debug` to see them. When
+  `ENVIRONMENT=production`, GORM is fully silent (no SQL lines at all). Any other
+  value, including an unset variable, enables SQL logging.
+- **Job logs:** scheduled runs log `job` and `durationMs`. Successful runs log at
+  `debug`, so a healthy deployment shows only failures (`Scheduled job failed`)
+  at info level. Job start messages (`[Job] ...`) are also `debug`.
+- **Email logs** mask recipient local parts (`j***@example.com`). Reset codes
+  are not logged.
+- **Container start:** `make migrate-up` and `make seed` run without echoing
+  the command, so `DATABASE_URL` and its password are not written to the logs.
 - **Rollbar:** panics and reported errors when `ROLLBAR_TOKEN` is set. Events
   are labeled with `ROLLBAR_ENVIRONMENT`, falling back to `ENVIRONMENT`.
   Credentials and session keys are scrubbed from payloads. HTTP panics are
@@ -104,8 +125,11 @@ There are no metrics or tracing endpoints.
 ## Health checks and scaling
 
 - Point platform health checks at `/api/v1/health`.
-- The process handles `SIGINT`/`SIGTERM` with a 30-second HTTP shutdown window,
-  then stops the worker and flushes Rollbar.
+- The process handles `SIGINT`/`SIGTERM` with one 30-second shutdown budget. It
+  stops accepting new HTTP connections and drains in-flight requests, stops the
+  scheduler and waits for queued and running jobs, closes the database pool,
+  then flushes Rollbar. Jobs still running when the budget ends get a cancelled
+  context and the log records a forced shutdown.
 - Database pool: max open 50, max idle 5, connection lifetime 1 hour (see
   `internal/database/database.go`).
 

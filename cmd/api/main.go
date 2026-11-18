@@ -154,23 +154,45 @@ func main() {
 	<-quit
 	logger.Info("Shutting down server...")
 
-	// Create context with timeout for shutdown
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// One budget covers draining HTTP, stopping jobs and closing the pool.
+	const shutdownTimeout = 30 * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
+	clean := true
 
-	// Shutdown HTTP server
+	// Stop accepting new connections and wait for in-flight requests.
 	if err := server.Shutdown(ctx); err != nil {
 		logger.Error("Server forced to shutdown", "error", err)
+		clean = false
 	}
 
-	// Shutdown background worker
-	worker.Shutdown()
-	logger.Info("Background worker stopped")
+	// Stop the scheduler and wait for queued and running jobs.
+	if err := worker.Shutdown(ctx); err != nil {
+		logger.Error("Background worker forced to stop", "error", err)
+		clean = false
+	} else {
+		logger.Info("Background worker stopped")
+	}
+
+	// Close the pool so Postgres receives a clean disconnect for every connection.
+	if sqlDB, err := db.DB(); err != nil {
+		logger.Error("Failed to get database handle for shutdown", "error", err)
+		clean = false
+	} else if err := sqlDB.Close(); err != nil {
+		logger.Error("Failed to close database connections", "error", err)
+		clean = false
+	} else {
+		logger.Info("Database connections closed")
+	}
 
 	// Close Rollbar and flush events before exit
 	flushRollbar()
 
-	logger.Info("Server exited gracefully")
+	if clean {
+		logger.Info("Server exited gracefully")
+	} else {
+		logger.Warn("Server exited after forced shutdown")
+	}
 }
 
 func setupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
@@ -513,8 +535,8 @@ func scheduleJobs(worker *jobs.Worker, svcs *services.Services) {
 	// running, so with restarts or long intervals (8h, 12h) jobs might never run.
 
 	// Check overdue payments every 12 hours
-	worker.ScheduleEveryImmediate(12*time.Hour, func(ctx context.Context) error {
-		logger.Info("[Job] Checking overdue payments...")
+	worker.ScheduleEveryImmediate("overdue_payments", 12*time.Hour, func(ctx context.Context) error {
+		logger.Debug("[Job] Checking overdue payments...")
 		// 1. Calculate and apply overdue interest
 		if err := svcs.Payment.CalculateOverdueInterest(ctx); err != nil {
 			logger.Error("Error calculating overdue interest", "error", err)
@@ -525,32 +547,32 @@ func scheduleJobs(worker *jobs.Worker, svcs *services.Services) {
 	})
 
 	// Update credit scores every 8 hours
-	worker.ScheduleEveryImmediate(8*time.Hour, func(ctx context.Context) error {
-		logger.Info("[Job] Updating credit scores...")
+	worker.ScheduleEveryImmediate("credit_scores", 8*time.Hour, func(ctx context.Context) error {
+		logger.Debug("[Job] Updating credit scores...")
 		return svcs.CreditScore.UpdateAllScores(ctx)
 	})
 
 	// Refresh analytics cache every 15 minutes
-	worker.ScheduleEveryImmediate(15*time.Minute, func(ctx context.Context) error {
-		logger.Info("[Job] Refreshing analytics cache...")
+	worker.ScheduleEveryImmediate("analytics_cache_refresh", 15*time.Minute, func(ctx context.Context) error {
+		logger.Debug("[Job] Refreshing analytics cache...")
 		return svcs.Analytics.RefreshCache(ctx)
 	})
 
 	// Release unpaid reservations every 8 hours
-	worker.ScheduleEveryImmediate(8*time.Hour, func(ctx context.Context) error {
-		logger.Info("[Job] Releasing unpaid reservations...")
+	worker.ScheduleEveryImmediate("release_unpaid_reservations", 8*time.Hour, func(ctx context.Context) error {
+		logger.Debug("[Job] Releasing unpaid reservations...")
 		return svcs.Contract.ReleaseUnpaidReservations(ctx)
 	})
 
 	// Nudge customers whose 48h hold is about to expire without a voucher.
-	worker.ScheduleEveryImmediate(8*time.Hour, func(ctx context.Context) error {
-		logger.Info("[Job] Sending reservation voucher reminders...")
+	worker.ScheduleEveryImmediate("reservation_voucher_reminders", 8*time.Hour, func(ctx context.Context) error {
+		logger.Debug("[Job] Sending reservation voucher reminders...")
 		return svcs.Contract.SendReservationVoucherReminders(ctx)
 	})
 
 	// Daily payment reminder emails for active users with active contracts
-	worker.ScheduleEveryImmediate(24*time.Hour, func(ctx context.Context) error {
-		logger.Info("[Job] Sending daily payment reminder emails...")
+	worker.ScheduleEveryImmediate("payment_reminder_emails", 24*time.Hour, func(ctx context.Context) error {
+		logger.Debug("[Job] Sending daily payment reminder emails...")
 		if err := svcs.Payment.SendDailyPaymentReminderEmails(ctx); err != nil {
 			return err
 		}
@@ -559,14 +581,14 @@ func scheduleJobs(worker *jobs.Worker, svcs *services.Services) {
 
 	// Expire overdue pending assignments and reassign the reservation every 5
 	// minutes. Runs once on startup to catch downtime.
-	worker.ScheduleEveryImmediate(5*time.Minute, func(ctx context.Context) error {
-		logger.Info("[Job] Expiring overdue seller assignments...")
+	worker.ScheduleEveryImmediate("expire_overdue_seller_assignments", 5*time.Minute, func(ctx context.Context) error {
+		logger.Debug("[Job] Expiring overdue seller assignments...")
 		return svcs.Assignment.ExpireOverdue(ctx)
 	})
 
 	// Nightly seller score recomputation from the 90-day assignment window.
-	worker.ScheduleEveryImmediate(24*time.Hour, func(ctx context.Context) error {
-		logger.Info("[Job] Recomputing seller scores...")
+	worker.ScheduleEveryImmediate("seller_score_recompute", 24*time.Hour, func(ctx context.Context) error {
+		logger.Debug("[Job] Recomputing seller scores...")
 		return svcs.Score.RecomputeAll(ctx)
 	})
 

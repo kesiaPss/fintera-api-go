@@ -154,7 +154,7 @@ func TestCalculateOverdueInterest_Logic(t *testing.T) {
 
 	// Setup Worker and NotificationService
 	worker := jobs.NewWorker(0) // 0 workers, but EnqueueAsync spawns its own goroutines
-	defer worker.Shutdown()
+	defer func() { _ = worker.Shutdown(context.Background()) }()
 
 	notifService := NewNotificationService(mockNotifRepo, mockUserRepo)
 

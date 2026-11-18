@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"time"
 
 	"gorm.io/gorm"
@@ -54,6 +55,33 @@ func isRecordNotFound(err error) bool {
 	return errors.Is(err, gorm.ErrRecordNotFound)
 }
 
+// ParamsFilter stops GORM from interpolating bind values into the statement it
+// logs. Values such as emails or names must never reach the log; the logged SQL
+// keeps its $n placeholders instead.
+func (l *GormLogger) ParamsFilter(_ context.Context, sql string, _ ...interface{}) (string, []interface{}) {
+	return sql, nil
+}
+
+const maxLoggedSQLLength = 1000
+
+var gormPlaceholder = regexp.MustCompile(`\$(\d+)\$`)
+
+// sanitizeSQL restores the $n placeholders that GORM wraps while explaining a
+// statement and bounds the length of what is logged.
+func sanitizeSQL(sql string) string {
+	sql = gormPlaceholder.ReplaceAllString(sql, "$$$1")
+	if len(sql) <= maxLoggedSQLLength {
+		return sql
+	}
+	return sql[:maxLoggedSQLLength] + "..."
+}
+
+// sqlMessage puts the duration and the query into the message itself, so the
+// line is readable even when only the message text is displayed.
+func sqlMessage(prefix string, elapsed time.Duration, sql string) string {
+	return fmt.Sprintf("%s %.1fms: %s", prefix, float64(elapsed)/float64(time.Millisecond), sql)
+}
+
 func (l *GormLogger) Trace(ctx context.Context, begin time.Time, fc func() (sql string, rowsAffected int64), err error) {
 	if l.LogLevel <= logger.Silent {
 		return
@@ -61,11 +89,12 @@ func (l *GormLogger) Trace(ctx context.Context, begin time.Time, fc func() (sql 
 
 	elapsed := time.Since(begin)
 	sql, rows := fc()
+	sql = sanitizeSQL(sql)
 
 	fields := []any{
 		slog.String("sql", sql),
 		slog.Int64("rows", rows),
-		slog.Duration("elapsed", elapsed),
+		slog.Float64("durationMs", float64(elapsed)/float64(time.Millisecond)),
 	}
 
 	if err != nil {
@@ -75,17 +104,17 @@ func (l *GormLogger) Trace(ctx context.Context, begin time.Time, fc func() (sql 
 		}
 		if l.LogLevel >= logger.Error {
 			fields = append(fields, slog.String("error", err.Error()))
-			Error("SQL Error", fields...)
+			Error(sqlMessage("SQL Error", elapsed, sql), fields...)
 		}
 		return
 	}
 
 	if l.SlowThreshold != 0 && elapsed > l.SlowThreshold && l.LogLevel >= logger.Warn {
-		Warn("Slow SQL", fields...)
+		Warn(sqlMessage("Slow SQL", elapsed, sql), fields...)
 		return
 	}
 
 	if l.LogLevel >= logger.Info {
-		Info("SQL", fields...)
+		Debug(sqlMessage("SQL", elapsed, sql), fields...)
 	}
 }

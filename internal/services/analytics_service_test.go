@@ -18,6 +18,7 @@ type fakeAnalyticsRepo struct {
 	repository.AnalyticsRepository
 	calls   map[string]int
 	metrics []models.ProjectOverviewMetrics
+	entries []repository.AnalyticsCacheEntry
 }
 
 func newFakeAnalyticsRepo() *fakeAnalyticsRepo {
@@ -38,6 +39,12 @@ func (f *fakeAnalyticsRepo) GetCache(context.Context, string, *uint) (*models.An
 
 func (f *fakeAnalyticsRepo) SetCache(_ context.Context, _ string, _ *uint, _ interface{}, _ time.Duration) error {
 	f.count("SetCache")
+	return nil
+}
+
+func (f *fakeAnalyticsRepo) SetCacheEntries(_ context.Context, entries []repository.AnalyticsCacheEntry) error {
+	f.count("SetCacheEntries")
+	f.entries = entries
 	return nil
 }
 
@@ -206,8 +213,39 @@ func TestRefreshCacheUsesBoundedQueries(t *testing.T) {
 		assert.Equal(t, oneProject[call], manyProjects[call], "%s cost does not grow with projects", call)
 	}
 
-	// Cache writes are per project by design (plus the three global entries);
-	// they are the only calls that scale with the project count.
-	assert.Equal(t, 3+2*1, oneProject["SetCache"])
-	assert.Equal(t, 3+2*10, manyProjects["SetCache"])
+	// All cache rows are written by one batched call, so the write count does
+	// not grow with the project count either.
+	assert.Equal(t, 1, oneProject["SetCacheEntries"])
+	assert.Equal(t, 1, manyProjects["SetCacheEntries"])
+	assert.Zero(t, manyProjects["SetCache"])
+}
+
+func TestRefreshCacheWritesEveryProjectEvenWithoutActivity(t *testing.T) {
+	projects := []models.Project{{ID: 1, Name: "Active"}, {ID: 2, Name: "Empty"}}
+	repo := newFakeAnalyticsRepo()
+	repo.metrics = []models.ProjectOverviewMetrics{{ProjectID: 1, TotalLots: 4, OccupiedLots: 2}}
+	service := NewAnalyticsService(repo, &fakeProjectRepo{projects: projects}, nil, nil)
+
+	require.NoError(t, service.RefreshCache(context.Background()))
+
+	projectEntries := make(map[uint]map[string]bool)
+	globalKeys := make(map[string]bool)
+	for _, entry := range repo.entries {
+		if entry.ProjectID == nil {
+			globalKeys[entry.Key] = true
+			continue
+		}
+		if projectEntries[*entry.ProjectID] == nil {
+			projectEntries[*entry.ProjectID] = make(map[string]bool)
+		}
+		projectEntries[*entry.ProjectID][entry.Key] = true
+	}
+
+	for _, project := range projects {
+		assert.True(t, projectEntries[project.ID]["analytics_overview"], "overview cached for project %d", project.ID)
+		assert.True(t, projectEntries[project.ID]["analytics_distribution"], "distribution cached for project %d", project.ID)
+	}
+	assert.True(t, globalKeys["analytics_overview"])
+	assert.True(t, globalKeys["analytics_distribution"])
+	assert.True(t, globalKeys["analytics_performance"])
 }

@@ -2,10 +2,15 @@ package services
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/sjperalta/fintera-api/internal/models"
 	"gorm.io/gorm"
 )
+
+// SystemAuditActor marks audit entries written without an authenticated user
+// (jobs, unauthenticated flows). It is stored as a NULL user_id.
+const SystemAuditActor uint = 0
 
 type AuditService struct {
 	db *gorm.DB
@@ -15,10 +20,9 @@ func NewAuditService(db *gorm.DB) *AuditService {
 	return &AuditService{db: db}
 }
 
-// Log records an audit entry
+// Log records an audit entry. A userID of SystemAuditActor is stored as NULL.
 func (s *AuditService) Log(ctx context.Context, userID uint, action, entity string, entityID uint, details, ip, userAgent string) error {
 	logEntry := &models.AuditLog{
-		UserID:    userID,
 		Action:    action,
 		Entity:    entity,
 		EntityID:  entityID,
@@ -26,7 +30,13 @@ func (s *AuditService) Log(ctx context.Context, userID uint, action, entity stri
 		IPAddress: ip,
 		UserAgent: userAgent,
 	}
-	return s.db.Create(logEntry).Error
+	if userID != SystemAuditActor {
+		logEntry.UserID = &userID
+	}
+	if err := s.db.Create(logEntry).Error; err != nil {
+		return fmt.Errorf("audit log %s %s #%d (actor %d): %w", action, entity, entityID, userID, err)
+	}
+	return nil
 }
 
 // List retrieves audit logs with filters (entity, search_term)
