@@ -121,16 +121,23 @@ func (s *AssignmentService) ApplyOnCreate(ctx context.Context, contract *models.
 		return nil
 	}
 
-	seller, err := s.SelectSeller(ctx, contract.ID, nil)
+	seller, usedFallback, err := s.chooseAutomaticSeller(ctx, contract.ID, nil)
 	if err != nil {
 		return err
 	}
 	if seller == nil {
+		s.auditContract(ctx, "ASSIGN_NONE",
+			fmt.Sprintf("No hay vendedores activos para el contrato %d", contract.ID), contract.ID)
 		return s.repo.UpdateContractAssignment(ctx, contract.ID, repository.ContractAssignmentUpdate{
 			Origin:     models.AssignmentOriginAutomatic,
 			Status:     models.AssignmentStatusNone,
 			AssignedAt: contract.AssignedAt,
 		})
+	}
+	if usedFallback {
+		s.auditContract(ctx, "ASSIGN_FALLBACK",
+			fmt.Sprintf("Sin vendedores high/medium disponibles; se ofrece el contrato %d al vendedor %s (nivel %s)",
+				contract.ID, seller.FullName, seller.ScoreLevel), contract.ID)
 	}
 	return s.Offer(ctx, contract, seller, models.AssignmentOriginAutomatic, now, nil)
 }
@@ -139,6 +146,39 @@ func (s *AssignmentService) ApplyOnCreate(ctx context.Context, contract *models.
 // exhausted: high before medium, lowest pending load, least recently assigned,
 // then a random tiebreak.
 func (s *AssignmentService) SelectSeller(ctx context.Context, contractID uint, extraExclude []uint) (*models.User, error) {
+	return s.selectSeller(ctx, contractID, extraExclude, s.repo.ListAssignableSellers, func(seller models.User) bool {
+		return seller.IsAssignable()
+	})
+}
+
+// SelectFallbackSeller returns any active seller when the high/medium pool is
+// empty. Low performers are not offered reservations while a healthy pool
+// exists, but leaving a reservation without an owner is worse: nobody can
+// follow up and the customer never learns who is assisting them.
+func (s *AssignmentService) SelectFallbackSeller(ctx context.Context, contractID uint, extraExclude []uint) (*models.User, error) {
+	return s.selectSeller(ctx, contractID, extraExclude, s.repo.ListActiveSellers, func(seller models.User) bool {
+		return seller.IsSeller() && seller.IsActive()
+	})
+}
+
+// chooseAutomaticSeller tries the assignable pool first and falls back to any
+// active seller. The bool reports whether the fallback pool was used.
+func (s *AssignmentService) chooseAutomaticSeller(ctx context.Context, contractID uint, extraExclude []uint) (*models.User, bool, error) {
+	seller, err := s.SelectSeller(ctx, contractID, extraExclude)
+	if err != nil || seller != nil {
+		return seller, false, err
+	}
+	seller, err = s.SelectFallbackSeller(ctx, contractID, extraExclude)
+	return seller, seller != nil, err
+}
+
+func (s *AssignmentService) selectSeller(
+	ctx context.Context,
+	contractID uint,
+	extraExclude []uint,
+	list func(context.Context, []uint) ([]models.User, error),
+	eligible func(models.User) bool,
+) (*models.User, error) {
 	expired, err := s.repo.ExpiredSellerIDsForContract(ctx, contractID)
 	if err != nil {
 		return nil, err
@@ -146,14 +186,14 @@ func (s *AssignmentService) SelectSeller(ctx context.Context, contractID uint, e
 	excluded := append([]uint{}, extraExclude...)
 	excluded = append(excluded, expired...)
 
-	sellers, err := s.repo.ListAssignableSellers(ctx, excluded)
+	sellers, err := list(ctx, excluded)
 	if err != nil {
 		return nil, err
 	}
 
 	candidates := make([]models.User, 0, len(sellers))
 	for _, seller := range sellers {
-		if seller.IsAssignable() {
+		if eligible(seller) {
 			candidates = append(candidates, seller)
 		}
 	}
@@ -523,14 +563,62 @@ func (s *AssignmentService) reassign(ctx context.Context, assignment *models.Ass
 		return err
 	}
 
-	seller, err := s.SelectSeller(ctx, contract.ID, nil)
+	seller, usedFallback, err := s.chooseAutomaticSeller(ctx, contract.ID, nil)
 	if err != nil {
 		return err
 	}
 	if seller == nil {
+		s.auditContract(ctx, "ASSIGN_NONE",
+			fmt.Sprintf("Sin vendedores activos para reasignar el contrato %d", contract.ID), contract.ID)
 		return nil
 	}
+	if usedFallback {
+		s.auditContract(ctx, "ASSIGN_FALLBACK",
+			fmt.Sprintf("Sin vendedores high/medium disponibles; se reasigna el contrato %d al vendedor %s (nivel %s)",
+				contract.ID, seller.FullName, seller.ScoreLevel), contract.ID)
+	}
 	return s.Offer(ctx, &contract, seller, models.AssignmentOriginAutomatic, now, nil)
+}
+
+// BackfillUnassigned offers an automatic seller to reservations created while
+// the assignable pool was empty. It is safe to run repeatedly: contracts that
+// already carry a seller are not selected.
+func (s *AssignmentService) BackfillUnassigned(ctx context.Context, limit int) (int, error) {
+	if s == nil || s.repo == nil {
+		return 0, nil
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	contracts, err := s.repo.FindUnassignedAutomatic(ctx, limit)
+	if err != nil {
+		return 0, err
+	}
+
+	now := s.now()
+	assigned := 0
+	for index := range contracts {
+		contract := &contracts[index]
+		seller, usedFallback, err := s.chooseAutomaticSeller(ctx, contract.ID, nil)
+		if err != nil {
+			return assigned, err
+		}
+		if seller == nil {
+			s.auditContract(ctx, "ASSIGN_NONE",
+				fmt.Sprintf("Sin vendedores activos en backfill para el contrato %d", contract.ID), contract.ID)
+			continue
+		}
+		if usedFallback {
+			s.auditContract(ctx, "ASSIGN_FALLBACK",
+				fmt.Sprintf("Backfill con fallback: contrato %d al vendedor %s (nivel %s)",
+					contract.ID, seller.FullName, seller.ScoreLevel), contract.ID)
+		}
+		if err := s.Offer(ctx, contract, seller, models.AssignmentOriginAutomatic, now, nil); err != nil {
+			return assigned, err
+		}
+		assigned++
+	}
+	return assigned, nil
 }
 
 func originOrAutomatic(origin string) string {
@@ -552,6 +640,15 @@ func (s *AssignmentService) audit(ctx context.Context, actorID uint, action, det
 		return
 	}
 	logIgnoredError("write assignment audit log", s.auditSvc.Log(ctx, actorID, action, "Assignment", assignmentID, details, "", ""))
+}
+
+// auditContract records assignment events that belong to the reservation
+// itself (no assignment row exists yet), using the system actor.
+func (s *AssignmentService) auditContract(ctx context.Context, action, details string, contractID uint) {
+	if s.auditSvc == nil {
+		return
+	}
+	logIgnoredError("write contract assignment audit log", s.auditSvc.Log(ctx, 0, action, "Contract", contractID, details, "", ""))
 }
 
 func (s *AssignmentService) notifyAssignmentCreated(ctx context.Context, contract *models.Contract, assignment *models.Assignment) {

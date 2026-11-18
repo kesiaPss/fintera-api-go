@@ -1509,6 +1509,28 @@ paths:
       summary: Reject assignment
       tags:
       - Assignments
+  /assignments/backfill:
+    post:
+      description: Offers an automatic seller to reservations that were created while
+        no high/medium seller was available. Safe to run repeatedly.
+      parameters:
+      - description: Maximum reservations to process (default 50, max 200)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Backfill unassigned automatic reservations
+      tags:
+      - Assignments
   /assignments/pending:
     get:
       description: Pending reservations assigned to the authenticated seller. Admins

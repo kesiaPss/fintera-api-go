@@ -114,6 +114,39 @@ func (h *AssignmentHandler) Reject(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"assignment": assignment.ToResponse(), "message": "Asignación rechazada"})
 }
 
+// @Summary Backfill unassigned automatic reservations
+// @Description Offers an automatic seller to reservations that were created while no high/medium seller was available. Safe to run repeatedly.
+// @Tags Assignments
+// @Produce json
+// @Param limit query int false "Maximum reservations to process (default 50, max 200)"
+// @Success 200 {object} map[string]interface{}
+// @Security BearerAuth
+// @Router /assignments/backfill [post]
+func (h *AssignmentHandler) BackfillUnassigned(c *gin.Context) {
+	limit := 50
+	if raw := strings.TrimSpace(c.Query("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "limit inválido"})
+			return
+		}
+		limit = parsed
+	}
+	if limit > 200 {
+		limit = 200
+	}
+
+	assigned, err := h.assignments.BackfillUnassigned(c.Request.Context(), limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "No se pudieron reasignar las reservas: " + err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"assigned": assigned,
+		"message":  "Reservas sin vendedor procesadas",
+	})
+}
+
 func (h *AssignmentHandler) respond(c *gin.Context, accept bool) (*models.Assignment, error) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil || id == 0 {
