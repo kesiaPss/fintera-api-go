@@ -2,9 +2,12 @@ package services
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"fmt"
 	"math"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -276,6 +279,119 @@ func PendingCommissionTotal(items []CommissionReportItem) float64 {
 		}
 	}
 	return total
+}
+
+// CommissionTotals are the KPIs of the commission report over every row of the
+// filtered period, independent of the page being returned.
+type CommissionTotals struct {
+	Commission  float64 `json:"commission"`
+	Amount      float64 `json:"amount"`
+	Paid        float64 `json:"paid"`
+	Pending     float64 `json:"pending"`
+	PaidCount   int     `json:"paid_count"`
+	AverageRate float64 `json:"average_rate"`
+	NetPending  float64 `json:"net_pending"`
+}
+
+// CommissionTotalsFor sums the filtered commission rows. The average rate is
+// weighted by amount and net pending subtracts the pending seller credits.
+func CommissionTotalsFor(items []CommissionReportItem, pendingCredits float64) CommissionTotals {
+	var totals CommissionTotals
+	for _, item := range items {
+		totals.Commission += item.Commission
+		totals.Amount += item.Amount
+		if item.CommissionPaidAt != nil {
+			totals.Paid += item.Commission
+			totals.PaidCount++
+		} else {
+			totals.Pending += item.Commission
+		}
+	}
+	if totals.Amount != 0 {
+		totals.AverageRate = totals.Commission / totals.Amount * 100
+	}
+	totals.NetPending = totals.Pending - pendingCredits
+	return totals
+}
+
+// CommissionSeller is one entry of the seller selector.
+type CommissionSeller struct {
+	ID   uint   `json:"id"`
+	Name string `json:"name"`
+}
+
+// CommissionSellersFor lists the sellers that appear in the rows, sorted by
+// name. Rows without a seller id are skipped.
+func CommissionSellersFor(items []CommissionReportItem) []CommissionSeller {
+	seen := make(map[uint]bool)
+	sellers := []CommissionSeller{}
+	for _, item := range items {
+		if item.SellerID == nil || seen[*item.SellerID] {
+			continue
+		}
+		seen[*item.SellerID] = true
+		sellers = append(sellers, CommissionSeller{ID: *item.SellerID, Name: item.Seller})
+	}
+	slices.SortFunc(sellers, func(a, b CommissionSeller) int {
+		return cmp.Or(strings.Compare(a.Name, b.Name), cmp.Compare(a.ID, b.ID))
+	})
+	return sellers
+}
+
+// FilterCommissionsBySeller keeps the rows whose seller id matches. Rows
+// without a seller id never match.
+func FilterCommissionsBySeller(items []CommissionReportItem, sellerID uint) []CommissionReportItem {
+	filtered := []CommissionReportItem{}
+	for _, item := range items {
+		if item.SellerID != nil && *item.SellerID == sellerID {
+			filtered = append(filtered, item)
+		}
+	}
+	return filtered
+}
+
+// FilterCommissionsBySearch keeps the rows that contain the term,
+// case-insensitively, in the client, project, lot, seller or contract id. The
+// contract and historical sale ids match with and without the "#" prefix, so
+// both "#43" and "43" find the same row. A blank term leaves every row
+// untouched and the original order is preserved.
+func FilterCommissionsBySearch(items []CommissionReportItem, term string) []CommissionReportItem {
+	needle := strings.ToLower(strings.TrimSpace(term))
+	if needle == "" {
+		return items
+	}
+
+	filtered := make([]CommissionReportItem, 0, len(items))
+	for _, item := range items {
+		if commissionMatchesSearch(item, needle) {
+			filtered = append(filtered, item)
+		}
+	}
+	return filtered
+}
+
+// commissionMatchesSearch reports whether one row contains the lower-cased
+// needle in any of its searchable fields.
+func commissionMatchesSearch(item CommissionReportItem, needle string) bool {
+	fields := []string{item.ClientName, item.Project, item.Lot, item.Seller}
+	if item.ContractID > 0 {
+		fields = append(fields, contractReference(item.ContractID), strconv.FormatUint(uint64(item.ContractID), 10))
+	}
+	if item.HistoricalSaleID != nil {
+		fields = append(fields, contractReference(*item.HistoricalSaleID), strconv.FormatUint(uint64(*item.HistoricalSaleID), 10))
+	}
+
+	for _, field := range fields {
+		if strings.Contains(strings.ToLower(field), needle) {
+			return true
+		}
+	}
+	return false
+}
+
+// contractReference renders an id with the "#" prefix used by the report.
+func contractReference(id uint) string {
+	return fmt.Sprintf("#%d", id)
 }
 
 func (s *ReportService) enrichCommissionScores(ctx context.Context, items []CommissionReportItem) {

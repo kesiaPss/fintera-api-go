@@ -4702,7 +4702,8 @@ paths:
     get:
       consumes:
       - application/json
-      description: Get a list of commissions for a period
+      description: Get a page of commissions for a period. Totals, the seller list
+        and pagination cover the full filtered period. Pages hold at most 20 rows.
       parameters:
       - description: Start Date (YYYY-MM-DD)
         in: query
@@ -4712,13 +4713,50 @@ paths:
         in: query
         name: end_date
         type: string
+      - description: 'Admin only: commissions of this seller id. Ignored for other
+          roles, which always see their own.'
+        in: query
+        name: seller_id
+        type: integer
+      - description: Case-insensitive search on client, project, lot, seller or contract
+          id (#43 or 43). Blank does not filter.
+        in: query
+        name: search
+        type: string
+      - default: 1
+        description: Commission page (1-based)
+        in: query
+        name: page
+        type: integer
+      - default: 20
+        description: Commissions per page (max 20)
+        in: query
+        name: per_page
+        type: integer
+      - default: 1
+        description: Credits page (1-based)
+        in: query
+        name: credits_page
+        type: integer
+      - default: 20
+        description: Credits per page (max 20)
+        in: query
+        name: credits_per_page
+        type: integer
       produces:
       - application/json
       responses:
         "200":
-          description: OK
+          description: commissions, pagination (with period_total), totals, sellers,
+            credits, credits_pagination, pending_credits, net_pending
           schema:
             additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
             type: object
       security:
       - BearerAuth: []
@@ -4745,6 +4783,12 @@ paths:
         in: query
         name: end_date
         type: string
+      - description: 'Admin only: limita el export a este vendedor id (comisiones,
+          créditos y neto). Ignorado para vendedores, que siempre ven lo propio. Valor
+          inválido o 0 responde 400'
+        in: query
+        name: seller_id
+        type: integer
       produces:
       - application/octet-stream
       - text/csv

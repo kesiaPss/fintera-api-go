@@ -35,6 +35,19 @@ func newReportExportTestHandler() *ReportExportHandler {
 	return NewReportExportHandler(&services.ReportExportService{})
 }
 
+// newCommissionsExportTestHandler wires a commissions report backed by the
+// shared handler fixture so the seller filter can be asserted in the output.
+func newCommissionsExportTestHandler() *ReportExportHandler {
+	exportSvc := services.NewReportExportService(
+		nil,
+		nil,
+		nil,
+		commissionsFixture(),
+		&commissionsCreditRepo{credits: commissionsFixtureCredits()},
+	)
+	return NewReportExportHandler(exportSvc)
+}
+
 func TestReportExportHandlerFormatValidation(t *testing.T) {
 	handler := newReportExportTestHandler()
 	router := newReportExportTestRouter(handler, "admin", 1)
@@ -81,6 +94,18 @@ func TestReportExportHandlerFormatValidation(t *testing.T) {
 			wantStatus: http.StatusBadRequest,
 			wantError:  "project_id inválido",
 		},
+		{
+			name:       "zero seller id on commissions export",
+			path:       "/reports/commissions_export?format=csv&seller_id=0",
+			wantStatus: http.StatusBadRequest,
+			wantError:  "seller_id inválido",
+		},
+		{
+			name:       "non numeric seller id on commissions export",
+			path:       "/reports/commissions_export?format=csv&seller_id=abc",
+			wantStatus: http.StatusBadRequest,
+			wantError:  "seller_id inválido",
+		},
 	}
 
 	for _, test := range tests {
@@ -115,7 +140,7 @@ func TestParseReportExportFiltersDefaultsToCurrentMonth(t *testing.T) {
 		context.Set("userID", uint(7))
 		context.Set("userRole", "admin")
 
-		filters, err := parseReportExportFilters(context, true, true, now)
+		filters, err := parseReportExportFilters(context, true, true, false, now)
 		if err != nil {
 			t.Fatalf("parseReportExportFilters returned error: %v", err)
 		}
@@ -139,7 +164,7 @@ func TestParseReportExportFiltersDefaultsToCurrentMonth(t *testing.T) {
 		context.Set("userID", uint(7))
 		context.Set("userRole", "admin")
 
-		filters, err := parseReportExportFilters(context, false, false, now)
+		filters, err := parseReportExportFilters(context, false, false, true, now)
 		if err != nil {
 			t.Fatalf("parseReportExportFilters returned error: %v", err)
 		}
@@ -154,7 +179,7 @@ func TestParseReportExportFiltersDefaultsToCurrentMonth(t *testing.T) {
 		context.Set("userID", uint(7))
 		context.Set("userRole", "admin")
 
-		filters, err := parseReportExportFilters(context, true, true, now)
+		filters, err := parseReportExportFilters(context, true, true, false, now)
 		if err != nil {
 			t.Fatalf("parseReportExportFilters returned error: %v", err)
 		}
@@ -172,7 +197,7 @@ func TestParseReportExportFiltersDefaultsToCurrentMonth(t *testing.T) {
 		context.Set("userID", uint(42))
 		context.Set("userRole", "seller")
 
-		filters, err := parseReportExportFilters(context, false, false, now)
+		filters, err := parseReportExportFilters(context, false, false, true, now)
 		if err != nil {
 			t.Fatalf("parseReportExportFilters returned error: %v", err)
 		}
@@ -180,6 +205,114 @@ func TestParseReportExportFiltersDefaultsToCurrentMonth(t *testing.T) {
 			t.Fatalf("seller filters = %+v, want FilterBySeller true and SellerID 42", filters)
 		}
 	})
+}
+
+func TestParseReportExportFiltersSellerID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.Local)
+
+	t.Run("admin seller id scopes the export", func(t *testing.T) {
+		context, _ := gin.CreateTestContext(httptest.NewRecorder())
+		context.Request = httptest.NewRequest(http.MethodGet, "/?seller_id=7", nil)
+		context.Set("userID", uint(1))
+		context.Set("userRole", "admin")
+
+		filters, err := parseReportExportFilters(context, false, false, true, now)
+		if err != nil {
+			t.Fatalf("parseReportExportFilters returned error: %v", err)
+		}
+		if !filters.FilterBySeller || filters.SellerID != 7 {
+			t.Fatalf("filters = %+v, want FilterBySeller true and SellerID 7", filters)
+		}
+	})
+
+	t.Run("admin without seller id sees every seller", func(t *testing.T) {
+		context, _ := gin.CreateTestContext(httptest.NewRecorder())
+		context.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+		context.Set("userID", uint(1))
+		context.Set("userRole", "admin")
+
+		filters, err := parseReportExportFilters(context, false, false, true, now)
+		if err != nil {
+			t.Fatalf("parseReportExportFilters returned error: %v", err)
+		}
+		if filters.FilterBySeller || filters.SellerID != 0 {
+			t.Fatalf("filters = %+v, want no seller filter", filters)
+		}
+	})
+
+	t.Run("seller ignores a foreign seller id", func(t *testing.T) {
+		context, _ := gin.CreateTestContext(httptest.NewRecorder())
+		context.Request = httptest.NewRequest(http.MethodGet, "/?seller_id=7", nil)
+		context.Set("userID", uint(42))
+		context.Set("userRole", "seller")
+
+		filters, err := parseReportExportFilters(context, false, false, true, now)
+		if err != nil {
+			t.Fatalf("parseReportExportFilters returned error: %v", err)
+		}
+		if !filters.FilterBySeller || filters.SellerID != 42 {
+			t.Fatalf("filters = %+v, want the seller's own id 42", filters)
+		}
+	})
+
+	t.Run("seller ignores an invalid seller id", func(t *testing.T) {
+		context, _ := gin.CreateTestContext(httptest.NewRecorder())
+		context.Request = httptest.NewRequest(http.MethodGet, "/?seller_id=abc", nil)
+		context.Set("userID", uint(42))
+		context.Set("userRole", "seller")
+
+		filters, err := parseReportExportFilters(context, false, false, true, now)
+		if err != nil {
+			t.Fatalf("parseReportExportFilters returned error: %v", err)
+		}
+		if !filters.FilterBySeller || filters.SellerID != 42 {
+			t.Fatalf("filters = %+v, want the seller's own id 42", filters)
+		}
+	})
+}
+
+func TestCommissionsExportAdminSellerFilter(t *testing.T) {
+	handler := newCommissionsExportTestHandler()
+	router := newReportExportTestRouter(handler, "admin", 1)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/reports/commissions_export?format=csv&seller_id=7", nil)
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", recorder.Code, recorder.Body.String())
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, "Ana Vendedora") {
+		t.Fatal("expected the scoped seller commissions and credits")
+	}
+	for _, unexpected := range []string{"Carlos Vendedor", "Sin vendedor"} {
+		if strings.Contains(body, unexpected) {
+			t.Fatalf("export should not contain %q with seller_id=7", unexpected)
+		}
+	}
+}
+
+func TestCommissionsExportSellerIgnoresForeignSellerID(t *testing.T) {
+	handler := newCommissionsExportTestHandler()
+	router := newReportExportTestRouter(handler, "seller", 8)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/reports/commissions_export?format=csv&seller_id=7", nil)
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", recorder.Code, recorder.Body.String())
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, "Carlos Vendedor") {
+		t.Fatal("expected the authenticated seller commissions")
+	}
+	if strings.Contains(body, "Ana Vendedora") {
+		t.Fatal("a seller must not see a foreign seller's rows or credits")
+	}
 }
 
 func newReportExportTestDocument() *services.ReportDocument {

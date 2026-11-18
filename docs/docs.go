@@ -5186,7 +5186,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Get a list of commissions for a period",
+                "description": "Get a page of commissions for a period. Totals, the seller list and pagination cover the full filtered period. Pages hold at most 20 rows.",
                 "consumes": [
                     "application/json"
                 ],
@@ -5209,14 +5209,63 @@ const docTemplate = `{
                         "description": "End Date (YYYY-MM-DD)",
                         "name": "end_date",
                         "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Admin only: commissions of this seller id. Ignored for other roles, which always see their own.",
+                        "name": "seller_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Case-insensitive search on client, project, lot, seller or contract id (#43 or 43). Blank does not filter.",
+                        "name": "search",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "default": 1,
+                        "description": "Commission page (1-based)",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "default": 20,
+                        "description": "Commissions per page (max 20)",
+                        "name": "per_page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "default": 1,
+                        "description": "Credits page (1-based)",
+                        "name": "credits_page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "default": 20,
+                        "description": "Credits per page (max 20)",
+                        "name": "credits_per_page",
+                        "in": "query"
                     }
                 ],
                 "responses": {
                     "200": {
-                        "description": "OK",
+                        "description": "commissions, pagination (with period_total), totals, sellers, credits, credits_pagination, pending_credits, net_pending",
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     }
                 }
@@ -5256,6 +5305,12 @@ const docTemplate = `{
                         "type": "string",
                         "description": "Fecha final (AAAA-MM-DD o RFC3339). Sin valor, incluye todos los períodos",
                         "name": "end_date",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Admin only: limita el export a este vendedor id (comisiones, créditos y neto). Ignorado para vendedores, que siempre ven lo propio. Valor inválido o 0 responde 400",
+                        "name": "seller_id",
                         "in": "query"
                     }
                 ],

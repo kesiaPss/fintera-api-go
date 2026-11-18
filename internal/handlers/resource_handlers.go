@@ -618,13 +618,20 @@ func NewReportHandler(reportService *services.ReportService) *ReportHandler {
 }
 
 // @Summary Commissions List
-// @Description Get a list of commissions for a period
+// @Description Get a page of commissions for a period. Totals, the seller list and pagination cover the full filtered period. Pages hold at most 20 rows.
 // @Tags Reports
 // @Accept json
 // @Produce json
 // @Param start_date query string false "Start Date (YYYY-MM-DD)"
 // @Param end_date query string false "End Date (YYYY-MM-DD)"
-// @Success 200 {object} map[string]interface{}
+// @Param seller_id query int false "Admin only: commissions of this seller id. Ignored for other roles, which always see their own."
+// @Param search query string false "Case-insensitive search on client, project, lot, seller or contract id (#43 or 43). Blank does not filter."
+// @Param page query int false "Commission page (1-based)" default(1)
+// @Param per_page query int false "Commissions per page (max 20)" default(20)
+// @Param credits_page query int false "Credits page (1-based)" default(1)
+// @Param credits_per_page query int false "Credits per page (max 20)" default(20)
+// @Success 200 {object} map[string]interface{} "commissions, pagination (with period_total), totals, sellers, credits, credits_pagination, pending_credits, net_pending"
+// @Failure 400 {object} map[string]string
 // @Security BearerAuth
 // @Router /reports/commissions [get]
 func (h *ReportHandler) Commissions(c *gin.Context) {
@@ -634,27 +641,54 @@ func (h *ReportHandler) Commissions(c *gin.Context) {
 	role := middleware.GetUserRole(c)
 	filterByCreator := role != "admin"
 
+	sellerFilter := userID
+	if !filterByCreator {
+		sellerFilter = 0
+		if raw := c.Query("seller_id"); raw != "" {
+			id, err := strconv.ParseUint(raw, 10, 32)
+			if err != nil || id == 0 {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "seller_id inválido"})
+				return
+			}
+			sellerFilter = uint(id)
+		}
+	}
+	page, perPage := parseCommissionPage(c, "page", "per_page")
+	creditsPage, creditsPerPage := parseCommissionPage(c, "credits_page", "credits_per_page")
+
 	items, err := h.reportService.GenerateCommissions(c.Request.Context(), startDate, endDate, userID, filterByCreator)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	sellerID := uint(0)
-	if filterByCreator {
-		sellerID = userID
+	sellers := services.CommissionSellersFor(items)
+	if sellerFilter > 0 {
+		items = services.FilterCommissionsBySeller(items, sellerFilter)
 	}
-	credits, pendingCredits, err := h.reportService.CommissionCredits(c.Request.Context(), sellerID)
+
+	credits, pendingCredits, err := h.reportService.CommissionCredits(c.Request.Context(), sellerFilter)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
+	totals := services.CommissionTotalsFor(items, pendingCredits)
+	periodTotal := len(items)
+	items = services.FilterCommissionsBySearch(items, c.Query("search"))
+	pageItems, pagination := paginateRows(items, page, perPage)
+	pagination["period_total"] = periodTotal
+	pageCredits, creditsPagination := paginateRows(credits, creditsPage, creditsPerPage)
+
 	c.JSON(http.StatusOK, gin.H{
-		"commissions":     items,
-		"credits":         credits,
-		"pending_credits": pendingCredits,
-		"net_pending":     services.PendingCommissionTotal(items) - pendingCredits,
+		"commissions":        pageItems,
+		"pagination":         pagination,
+		"totals":             totals,
+		"sellers":            sellers,
+		"credits":            pageCredits,
+		"credits_pagination": creditsPagination,
+		"pending_credits":    pendingCredits,
+		"net_pending":        totals.NetPending,
 	})
 }
 
