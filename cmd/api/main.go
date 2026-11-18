@@ -87,7 +87,7 @@ func main() {
 	}
 
 	// Connect to database
-	db, err := database.Connect(cfg.DatabaseURL)
+	db, err := database.Connect(cfg.DatabaseURL, cfg.Environment)
 	if err != nil {
 		logger.Error("Failed to connect to database", "error", err)
 		flushRollbar()

@@ -104,6 +104,10 @@ func (s *stubProjectRepo) FindAll(ctx context.Context) ([]models.Project, error)
 	return nil, s.err
 }
 
+func (s *stubProjectRepo) FindAllSummaries(ctx context.Context) ([]models.Project, error) {
+	return nil, s.err
+}
+
 func newInstructionHandler(instructions repository.ProjectPaymentInstructionRepository) *PaymentInstructionHandler {
 	service := services.NewProjectPaymentInstructionService(
 		instructions,
