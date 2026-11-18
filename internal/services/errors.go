@@ -22,6 +22,7 @@ var (
 	ErrAssignmentNotPending     = errors.New("la asignación ya fue respondida o expiró")
 	ErrAssignmentExpired        = errors.New("la asignación expiró")
 	ErrAssignmentSellerInactive = errors.New("el vendedor no está activo")
+	ErrNoAssignableSeller       = errors.New("no hay vendedores disponibles para asignar")
 	ErrScoreOverrideInvalid     = errors.New("puntaje o motivo inválido")
 
 	ErrInvalidCommissionRate      = errors.New("la tasa de comisión debe estar entre 0 y 100")

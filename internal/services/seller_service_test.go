@@ -84,3 +84,29 @@ func TestSellerServiceList(t *testing.T) {
 		t.Fatalf("fallback level = %q", list[1].ScoreLevel)
 	}
 }
+
+func TestSellerServiceListPublicOnlyExposesContactData(t *testing.T) {
+	first := &models.User{
+		ID:         1,
+		FullName:   "Ana",
+		Phone:      "+504 9999-0000",
+		Email:      "ana@example.com",
+		Role:       models.RoleSeller,
+		Status:     models.StatusActive,
+		Score:      90,
+		ScoreLevel: models.ScoreLevelHigh,
+	}
+	service := NewSellerService(newFakeSellerRepo(first), newFakeAssignmentRepo())
+
+	list, err := service.ListPublic(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("sellers = %d", len(list))
+	}
+	if list[0].ID != first.ID || list[0].FullName != first.FullName ||
+		list[0].Phone != first.Phone || list[0].Email != first.Email {
+		t.Fatalf("public seller = %+v", list[0])
+	}
+}

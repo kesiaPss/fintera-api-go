@@ -200,6 +200,16 @@ type SellerSummary struct {
 	ScoreLevel string  `json:"score_level"`
 }
 
+// PublicSellerSummary is the customer-facing seller picker payload. It carries
+// enough contact information to recognize an advisor without exposing score,
+// workload or revenue data.
+type PublicSellerSummary struct {
+	ID       uint   `json:"id"`
+	FullName string `json:"full_name"`
+	Phone    string `json:"phone"`
+	Email    string `json:"email"`
+}
+
 // UserResponse is the JSON response format for users
 type UserResponse struct {
 	ID                     uint       `json:"id"`

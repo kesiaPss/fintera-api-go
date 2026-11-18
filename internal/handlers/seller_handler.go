@@ -36,3 +36,19 @@ func (h *SellerHandler) Index(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"sellers": sellers})
 }
+
+// @Summary List public sellers
+// @Description Active sellers available as customer advisors. Exposes only name and contact data.
+// @Tags Sellers
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Failure 500 {object} map[string]string
+// @Router /public/sellers [get]
+func (h *SellerHandler) PublicIndex(c *gin.Context) {
+	sellers, err := h.sellers.ListPublic(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "No se pudieron cargar los vendedores"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"sellers": sellers})
+}
