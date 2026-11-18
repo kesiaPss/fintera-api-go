@@ -98,10 +98,10 @@ ensure-migrate:
 
 # Run database migrations
 migrate-up: ensure-migrate
-	$(MIGRATE) -path internal/database/migrations -database "$(DATABASE_URL)" up
+	@$(MIGRATE) -path internal/database/migrations -database "$(DATABASE_URL)" up
 
 migrate-down: ensure-migrate
-	$(MIGRATE) -path internal/database/migrations -database "$(DATABASE_URL)" down 1
+	@$(MIGRATE) -path internal/database/migrations -database "$(DATABASE_URL)" down 1
 
 migrate-create: ensure-migrate
 	@read -p "Migration name: " name; \
@@ -109,17 +109,17 @@ migrate-create: ensure-migrate
 
 # Drop database and run seed and migrations
 drop-db-seed-migrate: ensure-migrate
-	psql "$(subst fintera_api_development,postgres,$(DATABASE_URL))" -c "DROP DATABASE IF EXISTS fintera_api_development;"
-	psql "$(subst fintera_api_development,postgres,$(DATABASE_URL))" -c "CREATE DATABASE fintera_api_development;"
-	$(MIGRATE) -path internal/database/migrations -database "$(DATABASE_URL)" up
+	@psql "$(subst fintera_api_development,postgres,$(DATABASE_URL))" -c "DROP DATABASE IF EXISTS fintera_api_development;"
+	@psql "$(subst fintera_api_development,postgres,$(DATABASE_URL))" -c "CREATE DATABASE fintera_api_development;"
+	@$(MIGRATE) -path internal/database/migrations -database "$(DATABASE_URL)" up
 	@for f in $$(ls internal/database/seeds/*.sql | sort); do echo "Running seed: $$f"; psql "$(DATABASE_URL)" -f $$f; done
 
 # Drop database and run seed and migrations and force drop database
 drop-db-seed-migrate-force: ensure-migrate
-	psql "$(subst fintera_api_development,postgres,$(DATABASE_URL))" -c "SELECT pg_terminate_backend(pg_stat_activity.pid) FROM pg_stat_activity WHERE pg_stat_activity.datname = 'fintera_api_development' AND pid <> pg_backend_pid();"
-	psql "$(subst fintera_api_development,postgres,$(DATABASE_URL))" -c "DROP DATABASE IF EXISTS fintera_api_development;"
-	psql "$(subst fintera_api_development,postgres,$(DATABASE_URL))" -c "CREATE DATABASE fintera_api_development;"
-	$(MIGRATE) -path internal/database/migrations -database "$(DATABASE_URL)" up
+	@psql "$(subst fintera_api_development,postgres,$(DATABASE_URL))" -c "SELECT pg_terminate_backend(pg_stat_activity.pid) FROM pg_stat_activity WHERE pg_stat_activity.datname = 'fintera_api_development' AND pid <> pg_backend_pid();"
+	@psql "$(subst fintera_api_development,postgres,$(DATABASE_URL))" -c "DROP DATABASE IF EXISTS fintera_api_development;"
+	@psql "$(subst fintera_api_development,postgres,$(DATABASE_URL))" -c "CREATE DATABASE fintera_api_development;"
+	@$(MIGRATE) -path internal/database/migrations -database "$(DATABASE_URL)" up
 	@for f in $$(ls internal/database/seeds/*.sql | sort); do echo "Running seed: $$f"; psql "$(DATABASE_URL)" -f $$f; done
 
 # Run database seeds

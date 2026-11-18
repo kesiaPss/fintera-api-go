@@ -3,6 +3,7 @@ package logger
 import (
 	"log/slog"
 	"os"
+	"strings"
 	"sync/atomic"
 )
 
@@ -22,13 +23,23 @@ func Setup(env string) {
 
 func newHandler(_ string) slog.Handler {
 	opts := &slog.HandlerOptions{
-		Level: slog.LevelInfo,
+		Level: logLevel(),
 	}
 
 	if os.Getenv("LOG_FORMAT") == "text" {
 		return slog.NewTextHandler(os.Stdout, opts)
 	}
 	return slog.NewJSONHandler(os.Stdout, opts)
+}
+
+// logLevel reads LOG_LEVEL (debug, info, warn, error). Unset or invalid values
+// keep the info default; routine SQL and per-run job details log at debug.
+func logLevel() slog.Level {
+	var level slog.Level
+	if err := level.UnmarshalText([]byte(strings.TrimSpace(os.Getenv("LOG_LEVEL")))); err != nil {
+		return slog.LevelInfo
+	}
+	return level
 }
 
 func get() *slog.Logger {

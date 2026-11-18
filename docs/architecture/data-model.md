@@ -150,6 +150,10 @@ Manual audit trail written by `AuditService.Log` from services.
 Key columns: `user_id`, `action`, `entity`, `entity_id`, `details`, `ip_address`,
 `user_agent`, `created_at`.
 
+`user_id` is nullable (migration `000043`). Entries written without an
+authenticated actor (jobs, unauthenticated flows) pass `services.SystemAuditActor`
+(`0`), which is stored as `NULL`.
+
 ### `analytics_cache`
 
 JSONB cache for analytics results with an expiry timestamp. Filtered requests

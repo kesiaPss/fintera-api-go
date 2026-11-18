@@ -93,6 +93,27 @@ func TestSetCacheUsesAtomicUpsert(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestSetCacheEntriesUsesOneUpsertPerScope(t *testing.T) {
+	db, mock := setupMockDB(t)
+	repo := NewAnalyticsRepository(db)
+
+	projectOne, projectTwo := uint(1), uint(2)
+	mock.ExpectQuery(`(?s)INSERT INTO "analytics_cache".*ON CONFLICT \("cache_key","project_id"\) DO UPDATE`).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1).AddRow(2))
+	mock.ExpectQuery(`(?s)INSERT INTO "analytics_cache".*ON CONFLICT \("cache_key"\) WHERE project_id IS NULL DO UPDATE`).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(3))
+
+	err := repo.SetCacheEntries(context.Background(), []AnalyticsCacheEntry{
+		{Key: "analytics_overview", ProjectID: &projectOne, Data: map[string]int{"value": 1}, TTL: time.Minute},
+		{Key: "analytics_distribution", ProjectID: &projectOne, Data: map[string]int{"value": 2}, TTL: time.Minute},
+		{Key: "analytics_overview", ProjectID: &projectTwo, Data: map[string]int{"value": 3}, TTL: time.Minute},
+		{Key: "analytics_overview", Data: map[string]int{"value": 4}, TTL: time.Minute},
+	})
+
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 // TestSetCacheConcurrentUpsert runs against a real database when DATABASE_URL
 // is available, because sqlmock cannot model uniqueness enforcement.
 func TestSetCacheConcurrentUpsert(t *testing.T) {

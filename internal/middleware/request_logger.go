@@ -2,49 +2,59 @@ package middleware
 
 import (
 	"log/slog"
+	"regexp"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/sjperalta/fintera-api/pkg/logger"
 )
 
-// RequestLogger logs incoming HTTP requests using slog
+const (
+	RequestIDHeader = "X-Request-ID"
+	RequestIDKey    = "requestID"
+)
+
+var validRequestID = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
+
+// RequestLogger assigns each request an ID (propagating a valid X-Request-ID
+// from the caller, otherwise generating one), returns it in the response
+// header, and logs the request with its route template instead of the raw path
+// so entries can be matched with proxy access logs.
 func RequestLogger() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
-		path := c.Request.URL.Path
-		raw := c.Request.URL.RawQuery
 
-		// Process request
+		requestID := c.GetHeader(RequestIDHeader)
+		if !validRequestID.MatchString(requestID) {
+			requestID = uuid.NewString()
+		}
+		c.Set(RequestIDKey, requestID)
+		c.Header(RequestIDHeader, requestID)
+
 		c.Next()
 
 		// Skip logging for health check to avoid noise
-		if path == "/api/v1/health" {
+		if c.Request.URL.Path == "/api/v1/health" {
 			return
 		}
 
-		end := time.Now()
-		latency := end.Sub(start)
+		route := c.FullPath()
+		if route == "" {
+			route = "unmatched"
+		}
 
-		clientIP := c.ClientIP()
-		method := c.Request.Method
 		statusCode := c.Writer.Status()
 		errorMessage := c.Errors.ByType(gin.ErrorTypePrivate).String()
 
-		userAgent := c.Request.UserAgent()
-
-		if raw != "" {
-			path = path + "?" + raw
-		}
-
-		// Log attributes
 		attrs := []any{
-			slog.String("method", method),
-			slog.String("path", path),
+			slog.String("requestId", requestID),
+			slog.String("method", c.Request.Method),
+			slog.String("route", route),
 			slog.Int("status", statusCode),
-			slog.String("ip", clientIP),
-			slog.Duration("latency", latency),
-			slog.String("user_agent", userAgent),
+			slog.Float64("durationMs", float64(time.Since(start))/float64(time.Millisecond)),
+			slog.String("ip", c.ClientIP()),
+			slog.String("user_agent", c.Request.UserAgent()),
 		}
 
 		// Add error message if present

@@ -32,7 +32,7 @@ func TestCheckOverduePayments_NotifiesOncePerUser(t *testing.T) {
 	}
 
 	worker := jobs.NewWorker(0)
-	defer worker.Shutdown()
+	defer func() { _ = worker.Shutdown(context.Background()) }()
 
 	service := NewPaymentService(
 		paymentRepo,

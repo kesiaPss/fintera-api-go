@@ -28,7 +28,7 @@ func newPaymentLedgerTestService(t *testing.T) (*PaymentService, *mockPaymentRep
 
 	gdb, mockSQL := setupMockDB(t)
 	worker := jobs.NewWorker(1)
-	t.Cleanup(worker.Shutdown)
+	t.Cleanup(func() { _ = worker.Shutdown(context.Background()) })
 
 	service := &PaymentService{
 		repo:            paymentRepo,

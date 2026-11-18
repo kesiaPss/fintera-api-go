@@ -648,7 +648,7 @@ func (s *AssignmentService) auditContract(ctx context.Context, action, details s
 	if s.auditSvc == nil {
 		return
 	}
-	logIgnoredError("write contract assignment audit log", s.auditSvc.Log(ctx, 0, action, "Contract", contractID, details, "", ""))
+	logIgnoredError("write contract assignment audit log", s.auditSvc.Log(ctx, SystemAuditActor, action, "Contract", contractID, details, "", ""))
 }
 
 func (s *AssignmentService) notifyAssignmentCreated(ctx context.Context, contract *models.Contract, assignment *models.Assignment) {

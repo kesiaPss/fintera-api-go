@@ -60,6 +60,8 @@ Source: `internal/config/config.go`.
 | --- | --- | --- |
 | `PORT` | `8080` | HTTP listen port |
 | `ENVIRONMENT` | `development` | `production` enables Gin release mode and JSON logs |
+| `LOG_FORMAT` | JSON | `text` switches to human-readable logs (local use) |
+| `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error`. Routine SQL and per-run job completions log at `debug`; set `debug` to see them |
 | `DATABASE_URL` | — | **Required** PostgreSQL URL |
 | `JWT_SECRET` | dev fallback | Required in production |
 | `JWT_EXPIRATION_HOURS` | `24` | JWT lifetime |

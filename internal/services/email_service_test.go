@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"testing"
 
 	"github.com/resend/resend-go/v2"
@@ -120,13 +121,28 @@ func TestEmailService_checkNotificationPreconditions(t *testing.T) {
 	})
 }
 
+func TestEmailService_SendContractSubmittedSkipsUnresolvedRecipient(t *testing.T) {
+	logger.Setup("test")
+
+	service := NewEmailService(&config.Config{
+		EnableEmailNotifications: true,
+		ResendAPIKey:             "test_key",
+		FromEmail:                "from@example.com",
+	})
+	contract := &models.Contract{ID: 11, ApplicantUserID: 4}
+	contract.ApplicantUser.EmailNotifications = true
+
+	err := service.SendContractSubmitted(context.Background(), contract)
+	assert.NoError(t, err, "a missing applicant must be skipped, not reported as a send failure")
+}
+
 func TestApplyRecipientOverride(t *testing.T) {
 	params := &resend.SendEmailRequest{
 		To:      []string{"customer@example.com"},
 		Subject: "Bienvenido",
 	}
 	original := applyRecipientOverride(params, "delivered+local@resend.dev")
-	assert.Equal(t, "customer@example.com", original)
+	assert.Equal(t, []string{"customer@example.com"}, original)
 	assert.Equal(t, []string{"delivered+local@resend.dev"}, params.To)
 	assert.Equal(t, "[TEST → customer@example.com] Bienvenido", params.Subject)
 
@@ -135,7 +151,7 @@ func TestApplyRecipientOverride(t *testing.T) {
 		Subject: "Bienvenido",
 	}
 	original = applyRecipientOverride(prod, "   ")
-	assert.Empty(t, original)
+	assert.Nil(t, original)
 	assert.Equal(t, []string{"customer@example.com"}, prod.To)
 	assert.Equal(t, "Bienvenido", prod.Subject)
 }

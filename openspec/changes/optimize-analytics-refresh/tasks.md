@@ -15,6 +15,7 @@
 
 - [x] 3.1 Replace the read-then-write in `AnalyticsRepository.SetCache` with a single `clause.OnConflict` upsert on `(cache_key, project_id)`
 - [x] 3.2 Add a repository test that runs two concurrent `SetCache` calls and asserts one row per key with no duplicate-key error
+- [x] 3.3 Write all refresh cache rows through one batched `SetCacheEntries` call (at most one upsert per scope) instead of two upserts per project; recompute global entries in `RefreshCache` instead of reading them back through the cache; add a service test asserting every project gets entries, including projects with no activity
 
 ## 4. Metric accuracy
 

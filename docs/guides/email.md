@@ -115,7 +115,7 @@ All email methods call `EmailService.sendEmail`, which calls the pure helper
 - empty override → the message is sent unchanged (production behavior);
 - non-empty override → `To` becomes the override address and the subject gains
   the `[TEST → original recipients]` prefix;
-- the redirect is logged.
+- the redirect is logged with masked addresses (`j***@example.com`).
 
 Adding a new email type? Send it through `s.sendEmail(...)`, never call
 `s.resendClient.Emails.Send` directly, or it will bypass the override.

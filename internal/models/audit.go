@@ -7,7 +7,7 @@ import (
 // AuditLog represents a system audit entry
 type AuditLog struct {
 	ID        uint      `gorm:"primaryKey" json:"id"`
-	UserID    uint      `gorm:"not null" json:"user_id"`
+	UserID    *uint     `json:"user_id"`
 	Action    string    `gorm:"size:50;not null" json:"action"` // CREATE, UPDATE, DELETE, LOGIN, APPROVE
 	Entity    string    `gorm:"size:50;not null" json:"entity"` // Contract, User, Payment, etc.
 	EntityID  uint      `json:"entity_id"`

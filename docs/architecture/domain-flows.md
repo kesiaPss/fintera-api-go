@@ -310,3 +310,10 @@ every 8 hours.
 dashboard-style requests. Requests carrying date or year filters bypass the
 cache so filtered analytics are always fresh. `RefreshCache` is scheduled every
 15 minutes.
+
+`RefreshCache` recomputes the global overview, distribution and performance
+entries directly, not through the cache. Project metrics come from one grouped
+query each (overview, lot distribution, revenue trend), and every resulting row
+is written by `SetCacheEntries`, which issues at most two upserts (one for
+project-scoped rows, one for global rows). The number of statements therefore
+does not grow with the project count.

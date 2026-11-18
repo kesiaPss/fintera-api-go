@@ -321,7 +321,7 @@ func newContractHandlerForTest(t *testing.T) (*ContractHandler, *contractRepoStu
 	}
 
 	worker := jobs.NewWorker(1)
-	t.Cleanup(worker.Shutdown)
+	t.Cleanup(func() { _ = worker.Shutdown(context.Background()) })
 
 	service := services.NewContractService(
 		contractRepo,

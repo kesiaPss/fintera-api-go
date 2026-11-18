@@ -24,3 +24,20 @@ func TestNewHandlerOptInText(t *testing.T) {
 		t.Fatalf("expected a text handler when LOG_FORMAT=text, got %T", handler)
 	}
 }
+
+func TestLogLevelFromEnvironment(t *testing.T) {
+	tests := map[string]slog.Level{
+		"":        slog.LevelInfo,
+		"debug":   slog.LevelDebug,
+		"WARN":    slog.LevelWarn,
+		" error ": slog.LevelError,
+		"verbose": slog.LevelInfo,
+	}
+
+	for value, want := range tests {
+		t.Setenv("LOG_LEVEL", value)
+		if got := logLevel(); got != want {
+			t.Errorf("LOG_LEVEL=%q: level = %v, want %v", value, got, want)
+		}
+	}
+}

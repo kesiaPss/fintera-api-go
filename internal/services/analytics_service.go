@@ -304,10 +304,23 @@ func (s *AnalyticsService) RefreshCache(ctx context.Context) error {
 		return err
 	}
 
-	// Refresh global stats
-	_, _ = s.GetOverview(ctx, models.AnalyticsFilters{})
-	_, _ = s.GetDistribution(ctx, nil)
-	_, _ = s.GetPerformance(ctx, models.AnalyticsFilters{})
+	// Global entries are recomputed rather than read back through the cache, so
+	// the job always replaces them.
+	overview, err := s.computeOverview(ctx, models.AnalyticsFilters{})
+	if err != nil {
+		logger.Error("Failed to compute global analytics overview", "error", err)
+		return err
+	}
+	distribution, err := s.analyticsRepo.GetLotDistribution(ctx, nil)
+	if err != nil {
+		logger.Error("Failed to compute global lot distribution", "error", err)
+		return err
+	}
+	performance, err := s.analyticsRepo.GetProjectPerformance(ctx, models.AnalyticsFilters{})
+	if err != nil {
+		logger.Error("Failed to compute project performance", "error", err)
+		return err
+	}
 
 	// Refresh every project from a bounded set of aggregate queries instead of
 	// querying project by project.
@@ -337,17 +350,28 @@ func (s *AnalyticsService) RefreshCache(ctx context.Context) error {
 		metricsByProject[metric.ProjectID] = metric
 	}
 
+	entries := make([]repository.AnalyticsCacheEntry, 0, 2*len(projects)+3)
+	entries = append(entries,
+		repository.AnalyticsCacheEntry{Key: "analytics_overview", Data: overview, TTL: 15 * time.Minute},
+		repository.AnalyticsCacheEntry{Key: "analytics_distribution", Data: distribution, TTL: 15 * time.Minute},
+		repository.AnalyticsCacheEntry{Key: "analytics_performance", Data: performance, TTL: 30 * time.Minute},
+	)
 	for _, project := range projects {
 		pid := project.ID
-
-		overview := buildProjectOverview(metricsByProject[pid], trends[pid])
-		_ = s.analyticsRepo.SetCache(ctx, "analytics_overview", &pid, overview, 15*time.Minute)
 
 		dist := distributions[pid]
 		if dist == nil {
 			dist = &models.LotDistribution{}
 		}
-		_ = s.analyticsRepo.SetCache(ctx, "analytics_distribution", &pid, dist, 15*time.Minute)
+		entries = append(entries,
+			repository.AnalyticsCacheEntry{Key: "analytics_overview", ProjectID: &pid, Data: buildProjectOverview(metricsByProject[pid], trends[pid]), TTL: 15 * time.Minute},
+			repository.AnalyticsCacheEntry{Key: "analytics_distribution", ProjectID: &pid, Data: dist, TTL: 15 * time.Minute},
+		)
+	}
+
+	if err := s.analyticsRepo.SetCacheEntries(ctx, entries); err != nil {
+		logger.Error("Failed to store analytics cache", "error", err)
+		return err
 	}
 
 	// Clean up old cache
