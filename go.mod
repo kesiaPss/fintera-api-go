@@ -1,6 +1,6 @@
 module github.com/sjperalta/fintera-api
 
-go 1.27.3
+go 1.27.4
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
@@ -24,7 +24,7 @@ require (
 	github.com/swaggo/swag v1.16.6
 	github.com/xuri/excelize/v2 v2.11.1
 	golang.org/x/crypto v0.58.0
-	golang.org/x/image v0.44.0
+	golang.org/x/image v0.45.0
 	golang.org/x/net v0.62.0
 	gorm.io/driver/postgres v1.6.0
 	gorm.io/gorm v1.31.1

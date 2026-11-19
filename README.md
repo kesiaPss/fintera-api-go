@@ -3,7 +3,7 @@
 Go implementation of the Fintera API, a real-estate contract management backend
 migrated from Ruby on Rails.
 
-- **Stack:** Go 1.27.3, Gin, GORM, PostgreSQL, JWT, `looplab/fsm`
+- **Stack:** Go 1.27.4, Gin, GORM, PostgreSQL, JWT, `looplab/fsm`
 - **Docs:** [docs/README.md](docs/README.md)
 - **Agent guidance:** [AGENTS.md](AGENTS.md)
 

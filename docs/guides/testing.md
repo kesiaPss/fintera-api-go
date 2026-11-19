@@ -37,7 +37,7 @@ run in parallel, with superseded runs cancelled automatically.
 | `migrations` | PostgreSQL 15, migrate up, seeds, and a down/up reversibility check |
 | `docs` | regenerates Swagger and fails if `docs/` is stale |
 
-Each job sets up Go from `go.mod` (Go 1.27.3) with module caching. The
+Each job sets up Go from `go.mod` (Go 1.27.4) with module caching. The
 migrations job installs the prebuilt `golang-migrate` binary directly to keep
 the job fast; the other jobs do not need PostgreSQL.
 
