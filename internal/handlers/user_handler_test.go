@@ -96,10 +96,12 @@ func TestCreateUserRequestBinding(t *testing.T) {
 
 type mockUserRepo struct {
 	repository.UserRepository
-	mockList        func(ctx context.Context, query *repository.ListQuery) ([]models.User, int64, error)
-	mockFindByID    func(ctx context.Context, id uint) (*models.User, error)
-	mockUpdate      func(ctx context.Context, user *models.User) error
-	mockClientCount func(ctx context.Context, creatorIDs []uint) (map[uint]int64, error)
+	mockList            func(ctx context.Context, query *repository.ListQuery) ([]models.User, int64, error)
+	mockFindByID        func(ctx context.Context, id uint) (*models.User, error)
+	mockUpdate          func(ctx context.Context, user *models.User) error
+	mockClientCount     func(ctx context.Context, creatorIDs []uint) (map[uint]int64, error)
+	mockCountByRole     func(ctx context.Context) (map[string]int64, error)
+	mockHistoricalCount func(ctx context.Context) (int64, error)
 }
 
 func (m *mockUserRepo) List(ctx context.Context, query *repository.ListQuery) ([]models.User, int64, error) {
@@ -128,6 +130,20 @@ func (m *mockUserRepo) CountActiveClientsByCreator(ctx context.Context, creatorI
 		return m.mockClientCount(ctx, creatorIDs)
 	}
 	return map[uint]int64{}, nil
+}
+
+func (m *mockUserRepo) CountByRole(ctx context.Context) (map[string]int64, error) {
+	if m.mockCountByRole != nil {
+		return m.mockCountByRole(ctx)
+	}
+	return map[string]int64{}, nil
+}
+
+func (m *mockUserRepo) CountHistoricalClients(ctx context.Context) (int64, error) {
+	if m.mockHistoricalCount != nil {
+		return m.mockHistoricalCount(ctx)
+	}
+	return 0, nil
 }
 
 func TestUserHandler_Index_DefaultStatus(t *testing.T) {
@@ -163,6 +179,85 @@ func TestUserHandler_Index_DefaultStatus(t *testing.T) {
 	c.Request, _ = http.NewRequest("GET", "/users?status=inactive", nil)
 	handler.Index(c)
 	assert.Equal(t, "inactive", capturedStatus)
+}
+
+func TestUserHandler_Index_HistoricalFilter(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	mockRepo := &mockUserRepo{}
+	var capturedHistorical string
+	mockRepo.mockList = func(_ context.Context, query *repository.ListQuery) ([]models.User, int64, error) {
+		capturedHistorical = query.Filters["historical"]
+		return []models.User{}, 0, nil
+	}
+
+	userService := services.NewUserService(mockRepo, nil, nil, nil, nil, nil)
+	handler := NewUserHandler(userService, nil, nil, nil)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request, _ = http.NewRequest("GET", "/users?historical=1", nil)
+	handler.Index(c)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "1", capturedHistorical)
+}
+
+func TestUserHandler_Index_IncludesHistoricalClientFlag(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	mockRepo := &mockUserRepo{}
+	mockRepo.mockList = func(context.Context, *repository.ListQuery) ([]models.User, int64, error) {
+		return []models.User{
+			{ID: 30, FullName: "Cliente Histórico", Role: models.RoleUser, HistoricalClient: true},
+		}, 1, nil
+	}
+
+	userService := services.NewUserService(mockRepo, nil, nil, nil, nil, nil)
+	handler := NewUserHandler(userService, nil, nil, nil)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request, _ = http.NewRequest("GET", "/users?historical=1", nil)
+	handler.Index(c)
+
+	var payload struct {
+		Users []struct {
+			HistoricalClient bool `json:"historical_client"`
+		} `json:"users"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &payload))
+	require.Len(t, payload.Users, 1)
+	assert.True(t, payload.Users[0].HistoricalClient)
+}
+
+func TestUserHandler_Stats_IncludesHistoricalCount(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	mockRepo := &mockUserRepo{}
+	mockRepo.mockCountByRole = func(context.Context) (map[string]int64, error) {
+		return map[string]int64{"admin": 1, "seller": 2, "user": 7}, nil
+	}
+	mockRepo.mockHistoricalCount = func(context.Context) (int64, error) {
+		return 3, nil
+	}
+
+	userService := services.NewUserService(mockRepo, nil, nil, nil, nil, nil)
+	handler := NewUserHandler(userService, nil, nil, nil)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request, _ = http.NewRequest("GET", "/users/stats", nil)
+	handler.Stats(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var payload struct {
+		Total      int64 `json:"total"`
+		Historical int64 `json:"historical"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &payload))
+	assert.Equal(t, int64(10), payload.Total)
+	assert.Equal(t, int64(3), payload.Historical)
 }
 
 func TestUserHandler_Index_IncludesClientsCount(t *testing.T) {

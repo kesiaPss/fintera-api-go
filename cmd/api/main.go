@@ -19,6 +19,7 @@ import (
 	ginSwagger "github.com/swaggo/gin-swagger"
 
 	"github.com/sjperalta/fintera-api/docs"
+	"github.com/sjperalta/fintera-api/internal/backfills"
 	"github.com/sjperalta/fintera-api/internal/config"
 	"github.com/sjperalta/fintera-api/internal/database"
 	"github.com/sjperalta/fintera-api/internal/handlers"
@@ -114,8 +115,14 @@ func main() {
 	// Initialize services
 	svcs := services.NewServices(repos, worker, store, cfg, db)
 
-	// Schedule recurring jobs
-	scheduleJobs(worker, svcs)
+	// Registered data backfills. Pending tasks run asynchronously at startup.
+	backfillRegistry := backfills.DefaultRegistry(backfills.Dependencies{
+		HistoricalSale: svcs.HistoricalSale,
+	})
+	backfillRunner := backfills.NewRunner(repos.Backfill)
+
+	// Schedule recurring jobs and the startup backfill run
+	scheduleJobs(worker, svcs, backfillRunner, backfillRegistry)
 
 	// Initialize handlers
 	h := handlers.NewHandlers(svcs, store)
@@ -530,7 +537,25 @@ func setupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 	return router
 }
 
-func scheduleJobs(worker *jobs.Worker, svcs *services.Services) {
+func scheduleJobs(worker *jobs.Worker, svcs *services.Services, backfillRunner *backfills.Runner, backfillRegistry *backfills.Registry) {
+	// Run pending data backfills asynchronously so they never delay the HTTP
+	// server. Each task is recorded in backfill_runs and skipped after a
+	// successful run.
+	worker.EnqueueAsync(func(ctx context.Context) error {
+		for _, result := range backfillRunner.RunPending(ctx, backfillRegistry) {
+			if result.Err != nil {
+				logger.Error("Backfill failed", "task", result.Task.Name, "version", result.Task.Version, "error", result.Err)
+				continue
+			}
+			if result.Skipped {
+				logger.Debug("Backfill already completed", "task", result.Task.Name, "version", result.Task.Version)
+				continue
+			}
+			logger.Info("Backfill completed", "task", result.Task.Name, "version", result.Task.Version, "rows", result.Run.RowsAffected)
+		}
+		return nil
+	})
+
 	// Use ScheduleEveryImmediate so jobs run once on startup (e.g. after Railway deploy/restart),
 	// then at the given interval. Plain ScheduleEvery would wait for the first interval before
 	// running, so with restarts or long intervals (8h, 12h) jobs might never run.

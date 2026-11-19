@@ -26,6 +26,7 @@ type Repositories struct {
 	Seller         SellerRepository
 	Commission     CommissionRepository
 	HistoricalSale HistoricalSaleRepository
+	Backfill       BackfillRepository
 	// Overdue serves the overdue payments export with the report-only query.
 	Overdue OverdueReportRepository
 }
@@ -53,6 +54,7 @@ func NewRepositories(db *gorm.DB) *Repositories {
 		Seller:         NewSellerRepository(db),
 		Commission:     NewCommissionRepository(db),
 		HistoricalSale: NewHistoricalSaleRepository(db),
+		Backfill:       NewBackfillRepository(db),
 		Overdue:        NewOverdueReportRepository(db),
 	}
 }

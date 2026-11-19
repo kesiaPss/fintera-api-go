@@ -5943,6 +5943,12 @@ const docTemplate = `{
                         "description": "Filter by status",
                         "name": "status",
                         "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Set to 1 to list only historical clients",
+                        "name": "historical",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -8590,6 +8596,9 @@ const docTemplate = `{
                 "full_name": {
                     "type": "string"
                 },
+                "historical_client": {
+                    "type": "boolean"
+                },
                 "id": {
                     "type": "integer"
                 },
@@ -8682,6 +8691,9 @@ const docTemplate = `{
                 },
                 "full_name": {
                     "type": "string"
+                },
+                "historical_client": {
+                    "type": "boolean"
                 },
                 "id": {
                     "type": "integer"

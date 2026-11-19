@@ -23,6 +23,7 @@ type HistoricalSaleService struct {
 	repo          repository.HistoricalSaleRepository
 	commissionSvc *CommissionService
 	auditSvc      *AuditService
+	clients       *HistoricalClientService
 	now           func() time.Time
 }
 
@@ -31,11 +32,13 @@ func NewHistoricalSaleService(
 	repo repository.HistoricalSaleRepository,
 	commissionSvc *CommissionService,
 	auditSvc *AuditService,
+	clients *HistoricalClientService,
 ) *HistoricalSaleService {
 	return &HistoricalSaleService{
 		repo:          repo,
 		commissionSvc: commissionSvc,
 		auditSvc:      auditSvc,
+		clients:       clients,
 		now:           time.Now,
 	}
 }
@@ -123,6 +126,9 @@ func (s *HistoricalSaleService) Create(ctx context.Context, actorID uint, input 
 		return nil, ErrHistoricalSaleDuplicate
 	}
 
+	if err := s.clients.EnsureLinked(ctx, sale, actorID); err != nil {
+		return nil, err
+	}
 	if err := s.applyCommission(ctx, sale, actorID, input.CommissionAmount, input.Amount, true); err != nil {
 		return nil, err
 	}
@@ -177,6 +183,14 @@ func (s *HistoricalSaleService) Update(ctx context.Context, id, actorID uint, in
 		sale.Rate = updated.Rate
 	}
 	sale.EvidenceFile = updated.EvidenceFile
+
+	if err := s.clients.EnsureLinked(ctx, sale, actorID); err != nil {
+		return nil, err
+	}
+	if err := s.clients.SyncUser(ctx, sale); err != nil {
+		return nil, err
+	}
+
 	if input.CommissionStatus != nil {
 		sale.CommissionStatus = normalizeCommissionStatus(*input.CommissionStatus)
 	}
@@ -210,6 +224,15 @@ func (s *HistoricalSaleService) Update(ctx context.Context, id, actorID uint, in
 // List returns the historical sales visible to the caller.
 func (s *HistoricalSaleService) List(ctx context.Context, query *repository.HistoricalSaleQuery) ([]models.HistoricalSale, int64, error) {
 	return s.repo.List(ctx, query)
+}
+
+// BackfillClients links existing historical sales to customer accounts. It is
+// idempotent and is safe to run asynchronously at API startup.
+func (s *HistoricalSaleService) BackfillClients(ctx context.Context, batchSize int) (HistoricalClientBackfillResult, error) {
+	if s == nil || s.clients == nil {
+		return HistoricalClientBackfillResult{}, nil
+	}
+	return s.clients.Backfill(ctx, batchSize)
 }
 
 // Get returns one historical sale. Sellers can only read their own records;
@@ -396,6 +419,11 @@ func (s *HistoricalSaleService) ImportCSV(ctx context.Context, actorID uint, rea
 				result.Errors = append(result.Errors, HistoricalImportRowError{Row: rowNumber, Reason: "no se pudo calcular la comisión"})
 				continue
 			}
+		}
+
+		if err := s.clients.EnsureLinked(ctx, sale, actorID); err != nil {
+			result.Errors = append(result.Errors, HistoricalImportRowError{Row: rowNumber, Reason: "no se pudo crear el cliente: " + err.Error()})
+			continue
 		}
 
 		if err := s.repo.Create(ctx, sale); err != nil {

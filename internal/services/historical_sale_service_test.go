@@ -122,6 +122,30 @@ func (r *fakeHistoricalSaleRepository) UpdateValidation(_ context.Context, id ui
 	return gorm.ErrRecordNotFound
 }
 
+func (r *fakeHistoricalSaleRepository) ListWithoutClientUser(_ context.Context, afterID uint, limit int) ([]models.HistoricalSale, error) {
+	result := make([]models.HistoricalSale, 0, len(r.sales))
+	for _, sale := range r.sales {
+		if sale.ClientUserID != nil || sale.ID <= afterID {
+			continue
+		}
+		result = append(result, sale)
+		if limit > 0 && len(result) >= limit {
+			break
+		}
+	}
+	return result, nil
+}
+
+func (r *fakeHistoricalSaleRepository) SetClientUser(_ context.Context, id, userID uint) error {
+	for i := range r.sales {
+		if r.sales[i].ID == id {
+			r.sales[i].ClientUserID = &userID
+			return nil
+		}
+	}
+	return gorm.ErrRecordNotFound
+}
+
 func stringValue(value *string) string {
 	if value == nil {
 		return ""
@@ -131,7 +155,7 @@ func stringValue(value *string) string {
 
 func TestHistoricalSaleCreateIsPendingAndUsesSaleDate(t *testing.T) {
 	repo := newFakeHistoricalSaleRepository()
-	service := NewHistoricalSaleService(repo, nil, nil)
+	service := NewHistoricalSaleService(repo, nil, nil, nil)
 	ctx := context.Background()
 
 	input := HistoricalSaleInput{
@@ -159,7 +183,7 @@ func TestHistoricalSaleCreateIsPendingAndUsesSaleDate(t *testing.T) {
 
 func TestHistoricalSaleGetScopesByOwner(t *testing.T) {
 	repo := newFakeHistoricalSaleRepository()
-	service := NewHistoricalSaleService(repo, nil, nil)
+	service := NewHistoricalSaleService(repo, nil, nil, nil)
 	ctx := context.Background()
 
 	sale, err := service.Create(ctx, 4, sampleHistoricalInput("333", "2023-03-10"), "", "")
@@ -182,7 +206,7 @@ func TestHistoricalSaleGetScopesByOwner(t *testing.T) {
 
 func TestHistoricalSaleUpdateKeepsRateWhenOmitted(t *testing.T) {
 	repo := newFakeHistoricalSaleRepository()
-	service := NewHistoricalSaleService(repo, nil, nil)
+	service := NewHistoricalSaleService(repo, nil, nil, nil)
 	ctx := context.Background()
 
 	sale, err := service.Create(ctx, 4, sampleHistoricalInput("444", "2023-04-10"), "", "")
@@ -203,9 +227,61 @@ func TestHistoricalSaleUpdateKeepsRateWhenOmitted(t *testing.T) {
 	assert.InDelta(t, 12000.0, updated.CommissionAmount, 0.01)
 }
 
+func TestHistoricalSaleCreateLinksCustomerUser(t *testing.T) {
+	repo := newFakeHistoricalSaleRepository()
+	users := newFakeHistoricalUserRepo()
+	service := NewHistoricalSaleService(repo, nil, nil, NewHistoricalClientService(users, repo))
+	ctx := context.Background()
+
+	sale, err := service.Create(ctx, 4, sampleHistoricalInput("555", "2023-05-10"), "", "")
+	require.NoError(t, err)
+	require.NotNil(t, sale.ClientUserID)
+	require.Len(t, users.users, 1)
+	assert.Equal(t, users.users[0].ID, *sale.ClientUserID)
+	assert.True(t, users.users[0].HistoricalClient)
+}
+
+func TestHistoricalSaleImportLinksCustomerUsers(t *testing.T) {
+	repo := newFakeHistoricalSaleRepository()
+	users := newFakeHistoricalUserRepo()
+	service := NewHistoricalSaleService(repo, nil, nil, NewHistoricalClientService(users, repo))
+	csv := strings.NewReader(`nombre,identidad,precio,fecha_venta
+Ana Uno,777,100000,2023-06-01
+Ana Dos,888,120000,2023-06-02
+`)
+
+	result, err := service.ImportCSV(context.Background(), 4, csv, HistoricalImportOptions{
+		CommissionWithSaleDate: true,
+	}, "", "")
+	require.NoError(t, err)
+	assert.Equal(t, 2, result.Imported)
+	require.Len(t, users.users, 2)
+	for _, sale := range repo.sales {
+		assert.NotNil(t, sale.ClientUserID)
+	}
+}
+
+func TestHistoricalSaleUpdateRelinksCustomerUser(t *testing.T) {
+	repo := newFakeHistoricalSaleRepository()
+	users := newFakeHistoricalUserRepo()
+	service := NewHistoricalSaleService(repo, nil, nil, NewHistoricalClientService(users, repo))
+	ctx := context.Background()
+
+	created, err := service.Create(ctx, 4, sampleHistoricalInput("999", "2023-07-10"), "", "")
+	require.NoError(t, err)
+	require.NotNil(t, created.ClientUserID)
+	firstUserID := *created.ClientUserID
+
+	updated, err := service.Update(ctx, created.ID, 4, sampleHistoricalInput("1000", "2023-07-10"), false, "", "")
+	require.NoError(t, err)
+	require.NotNil(t, updated.ClientUserID)
+	assert.NotEqual(t, firstUserID, *updated.ClientUserID)
+	require.Len(t, users.users, 2)
+}
+
 func TestHistoricalSaleAdminValidation(t *testing.T) {
 	repo := newFakeHistoricalSaleRepository()
-	service := NewHistoricalSaleService(repo, nil, nil)
+	service := NewHistoricalSaleService(repo, nil, nil, nil)
 	ctx := context.Background()
 
 	first, err := service.Create(ctx, 4, sampleHistoricalInput("111", "2023-01-10"), "", "")
@@ -239,7 +315,7 @@ func TestHistoricalSaleImportCSVSummary(t *testing.T) {
 	}
 	require.NoError(t, repo.Create(context.Background(), &existing))
 
-	service := NewHistoricalSaleService(repo, nil, nil)
+	service := NewHistoricalSaleService(repo, nil, nil, nil)
 	csv := strings.NewReader(`nombre,identidad,precio,fecha_venta,proyecto
 Juan Pérez,222,100000,2023-02-01,Proyecto A
 Duplicado,111,50000,2023-01-01,Proyecto B
@@ -279,7 +355,7 @@ func TestHistoricalSaleImportWithoutSkipDuplicatesReportsError(t *testing.T) {
 	}
 	require.NoError(t, repo.Create(context.Background(), &existing))
 
-	service := NewHistoricalSaleService(repo, nil, nil)
+	service := NewHistoricalSaleService(repo, nil, nil, nil)
 	csv := strings.NewReader("nombre,identidad,precio,fecha_venta\nDuplicado,111,50000,2023-01-01\n")
 	result, err := service.ImportCSV(context.Background(), 4, csv, HistoricalImportOptions{
 		SkipDuplicates:         false,
@@ -295,7 +371,7 @@ func TestHistoricalSaleImportWithoutSkipDuplicatesReportsError(t *testing.T) {
 
 func TestHistoricalSaleImportAcceptsColumnMapping(t *testing.T) {
 	repo := newFakeHistoricalSaleRepository()
-	service := NewHistoricalSaleService(repo, nil, nil)
+	service := NewHistoricalSaleService(repo, nil, nil, nil)
 	csv := strings.NewReader("Cliente,Documento,Monto,Fecha\nAna,999,250000,2024-04-01\n")
 
 	result, err := service.ImportCSV(context.Background(), 4, csv, HistoricalImportOptions{
@@ -317,7 +393,7 @@ func TestHistoricalSaleImportAcceptsColumnMapping(t *testing.T) {
 
 func TestHistoricalSaleImportWithoutCommissionLeavesZero(t *testing.T) {
 	repo := newFakeHistoricalSaleRepository()
-	service := NewHistoricalSaleService(repo, nil, nil)
+	service := NewHistoricalSaleService(repo, nil, nil, nil)
 	csv := strings.NewReader("nombre,identidad,precio,fecha_venta\nLuis,777,100000,2023-06-01\n")
 	result, err := service.ImportCSV(context.Background(), 4, csv, HistoricalImportOptions{
 		SkipDuplicates:         true,
