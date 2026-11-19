@@ -531,6 +531,26 @@ func setupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 }
 
 func scheduleJobs(worker *jobs.Worker, svcs *services.Services) {
+	// Link existing historical sales to customer accounts once at startup. The
+	// operation is idempotent and async so it does not delay the HTTP server.
+	worker.EnqueueAsync(func(ctx context.Context) error {
+		result, err := svcs.HistoricalSale.BackfillClients(ctx, 200)
+		if err != nil {
+			logger.Error("Historical client backfill failed", "error", err)
+			return err
+		}
+		for _, message := range result.Messages {
+			logger.Warn("Historical client backfill warning", "detail", message)
+		}
+		logger.Info(
+			"Historical client backfill finished",
+			"linked", result.Linked,
+			"skipped", result.Skipped,
+			"errors", result.Errors,
+		)
+		return nil
+	})
+
 	// Use ScheduleEveryImmediate so jobs run once on startup (e.g. after Railway deploy/restart),
 	// then at the given interval. Plain ScheduleEvery would wait for the first interval before
 	// running, so with restarts or long intervals (8h, 12h) jobs might never run.

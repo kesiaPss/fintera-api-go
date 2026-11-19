@@ -15,7 +15,6 @@ COPY . .
 
 # Build binary
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main ./cmd/api
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o historical-clients-backfill ./cmd/backfill-historical-clients
 
 # Final stage
 FROM alpine:latest
@@ -37,7 +36,6 @@ WORKDIR /root/
 
 # Copy binary from builder
 COPY --from=builder /app/main .
-COPY --from=builder /app/historical-clients-backfill .
 
 # Copy migration files, seed files, and Makefile for automated migrations
 COPY internal/database/migrations ./internal/database/migrations
@@ -50,5 +48,5 @@ RUN mkdir -p /root/storage
 # Expose port
 EXPOSE 8080
 
-# Run migrations, link historical clients, then start the application
-CMD ["sh", "-c", "make migrate-up && make seed && ./historical-clients-backfill && ./main"]
+# Run migrations and start the application
+CMD ["sh", "-c", "make migrate-up && make seed && ./main"]

@@ -22,24 +22,23 @@ production.
 
 The `Dockerfile` is a two-stage build:
 
-1. `golang:1.27.3-alpine` builds `./cmd/api` into `/app/main` and
-   `./cmd/backfill-historical-clients` into
-   `/app/historical-clients-backfill`.
+1. `golang:1.27.3-alpine` builds `./cmd/api` into `/app/main`.
 2. `alpine` runtime installs CA certificates, timezone data, `make`, `curl`,
    `postgresql-client`, and `golang-migrate`.
 
 Container start command:
 
 ```sh
-make migrate-up && make seed && ./historical-clients-backfill && ./main
+make migrate-up && make seed && ./main
 ```
 
 Implications:
 
 - Migrations run on every container start.
 - Seeds run on every container start and must remain idempotent.
-- The historical-client backfill runs on every start but only processes sales
-  with `client_user_id IS NULL`; it is safe and fast after the first run.
+- The API links historical sales to customer accounts asynchronously at startup.
+  The backfill only processes sales with `client_user_id IS NULL`, so it is safe
+  and fast after the first run.
 - The container listens on `8080` by default; override `PORT` if needed.
 - The runtime stage has **no Go toolchain**. The Makefile detects this and
   falls back to `/usr/local/bin`, where the Dockerfile preinstalls

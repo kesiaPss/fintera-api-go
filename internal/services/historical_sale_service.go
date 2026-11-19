@@ -226,6 +226,15 @@ func (s *HistoricalSaleService) List(ctx context.Context, query *repository.Hist
 	return s.repo.List(ctx, query)
 }
 
+// BackfillClients links existing historical sales to customer accounts. It is
+// idempotent and is safe to run asynchronously at API startup.
+func (s *HistoricalSaleService) BackfillClients(ctx context.Context, batchSize int) (HistoricalClientBackfillResult, error) {
+	if s == nil || s.clients == nil {
+		return HistoricalClientBackfillResult{}, nil
+	}
+	return s.clients.Backfill(ctx, batchSize)
+}
+
 // Get returns one historical sale. Sellers can only read their own records;
 // admins can read any record.
 func (s *HistoricalSaleService) Get(ctx context.Context, id, actorID uint, isAdmin bool) (*models.HistoricalSale, error) {

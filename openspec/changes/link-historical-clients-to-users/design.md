@@ -27,8 +27,10 @@ person cannot be reused for a new sale and does not appear in admin.
 - `ListWithoutClientUser(afterID, limit)` processes in id order.
 - `HistoricalClientService.Backfill` is idempotent and reports linked, skipped
   and error counts.
-- The Docker command runs the binary after migrations and seeds. Per-record
-  conflicts are logged and retried on the next deployment.
+- The API enqueues the backfill asynchronously at startup through the background
+  worker, so it does not delay the HTTP server. Per-record conflicts are logged
+  and retried on the next start.
+- `make backfill-historical-clients` remains available for manual runs.
 
 ### API surface
 

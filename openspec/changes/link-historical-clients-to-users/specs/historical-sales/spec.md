@@ -33,11 +33,11 @@ SHALL be marked `historical_client = true` and SHALL NOT receive a welcome email
 
 ### Requirement: Historical client backfill
 
-The API SHALL provide an idempotent backfill that links historical sales created
-before the feature. The deployment SHALL run it after migrations.
+The API SHALL link historical sales created before the feature asynchronously at
+startup. The backfill SHALL be idempotent and SHALL skip already linked records.
 
-#### Scenario: Run the backfill
+#### Scenario: API startup backfill
 
-- **WHEN** the backfill starts with unlinked rows
-- **THEN** each row is linked to a customer account
+- **WHEN** the API starts with unlinked historical sales
+- **THEN** the background worker links them to customer accounts
 - **AND** a second run makes no changes

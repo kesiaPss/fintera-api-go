@@ -13,8 +13,8 @@
 ## 3. Backfill and deployment
 
 - [x] 3.1 Add `cmd/backfill-historical-clients` and the Makefile target
-- [x] 3.2 Run the backfill in the Docker start command
-- [x] 3.3 Document the deployment behavior
+- [x] 3.2 Run the backfill asynchronously from the API startup worker
+- [x] 3.3 Document the runtime behavior
 
 ## 4. API surface
 
