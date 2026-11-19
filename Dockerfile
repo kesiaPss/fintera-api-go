@@ -13,8 +13,9 @@ RUN go mod download
 # Copy source code
 COPY . .
 
-# Build binary
+# Build binaries
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main ./cmd/api
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o backfill ./cmd/backfill
 
 # Final stage
 FROM alpine:latest
@@ -34,8 +35,9 @@ RUN curl -L https://github.com/golang-migrate/migrate/releases/download/v4.20.1/
 
 WORKDIR /root/
 
-# Copy binary from builder
+# Copy binaries from builder
 COPY --from=builder /app/main .
+COPY --from=builder /app/backfill .
 
 # Copy migration files, seed files, and Makefile for automated migrations
 COPY internal/database/migrations ./internal/database/migrations

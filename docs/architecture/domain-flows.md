@@ -224,6 +224,14 @@ Worker characteristics (`internal/jobs/worker.go`):
   not.
 - Stats are exposed by `GET /api/v1/jobs/status` (admin).
 
+### One-off backfills
+
+Data tasks that must run once after a deploy use the backfill runner instead of
+the recurring scheduler. The API enqueues pending tasks on the same worker at
+startup; each run is recorded in `backfill_runs` and skipped after a successful
+run for its version. See [Backfills](backfills.md) for the flow, ledger,
+versioning rules and the `cmd/backfill` commands.
+
 ## Reports and exports
 
 `ReportService` renders report PDFs natively with `gofpdf`, so no external

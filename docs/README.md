@@ -12,6 +12,7 @@ Go API as it exists in code today, not the historical Rails implementation.
 | Architecture overview | [architecture/overview.md](architecture/overview.md) |
 | Data model | [architecture/data-model.md](architecture/data-model.md) |
 | Business flows | [architecture/domain-flows.md](architecture/domain-flows.md) |
+| Backfills | [architecture/backfills.md](architecture/backfills.md) |
 | API and authorization | [architecture/api-and-auth.md](architecture/api-and-auth.md) |
 | Testing | [guides/testing.md](guides/testing.md) |
 | Email setup (Resend) | [guides/email.md](guides/email.md) |
@@ -27,6 +28,7 @@ docs/
 │   ├── overview.md                 # stack, layering, bootstrap, package map
 │   ├── data-model.md               # tables, enums, relationships, ledger
 │   ├── domain-flows.md             # contract/payment lifecycles, jobs, reports
+│   ├── backfills.md                # one-off data task runner and ledger
 │   └── api-and-auth.md             # routes, RBAC, auth, response conventions
 ├── guides/
 │   ├── development.md              # local setup and commands

@@ -60,7 +60,7 @@ docker run -p 8080:8080 --env-file .env fintera-api
 
 ## Backfills
 
-The API exposes a generic runner for one-off data tasks:
+The API exposes a generic runner for one-off data tasks. Locally:
 
 ```bash
 make backfill ARGS="-list"
@@ -69,7 +69,17 @@ make backfill ARGS="-task=historical_clients -force"
 ```
 
 Without `-task`, it runs every pending task. `-force` re-runs a completed task
-and records a new run. The current historical-client alias is still available:
+and records a new run.
+
+The Docker image also contains the `backfill` binary, so a manual run in a
+container does not need Go:
+
+```bash
+docker exec -it <container> ./backfill -list
+docker exec -it <container> ./backfill -task=historical_clients -force
+```
+
+The current historical-client alias is still available:
 
 ```bash
 make backfill-historical-clients
