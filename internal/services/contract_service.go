@@ -78,6 +78,10 @@ type ContractAssignmentInput struct {
 	SellerID          *uint
 	ReferralGUID      string
 	AttributionCookie string
+	// AutoAccept assigns the requested seller immediately. It is used when a
+	// seller creates the reservation in the back office, so they do not have to
+	// accept their own assignment, and attribution cannot reassign it.
+	AutoAccept bool
 }
 
 // CreateWithAssignment resolves the referral attribution and the requested
@@ -88,7 +92,7 @@ func (s *ContractService) CreateWithAssignment(ctx context.Context, contract *mo
 
 	var attributedSeller *models.User
 	var referralGUID string
-	if s.referralSvc != nil {
+	if !input.AutoAccept && s.referralSvc != nil {
 		attributedSeller, referralGUID, _ = s.referralSvc.ResolveAttribution(ctx, input.ReferralGUID, input.AttributionCookie, now)
 	}
 
@@ -115,28 +119,23 @@ func (s *ContractService) CreateWithAssignment(ctx context.Context, contract *mo
 			contract.AssignmentOrigin = models.AssignmentOriginAutomatic
 			contract.AssignmentStatus = models.AssignmentStatusNone
 		}
-	case origin == models.AssignmentOriginManual && input.SellerID != nil:
+	case (origin == models.AssignmentOriginManual || origin == "") && input.SellerID != nil:
 		seller, err := s.ValidateAssignmentSeller(ctx, *input.SellerID)
 		if err != nil {
 			return err
 		}
-		deadline := s.assignmentDeadline(ctx, now)
 		contract.SellerID = &seller.ID
 		contract.AssignmentOrigin = models.AssignmentOriginManual
-		contract.AssignmentStatus = models.AssignmentStatusPending
 		contract.AssignedAt = &now
-		contract.AcceptDeadlineAt = &deadline
-	case origin == "" && input.SellerID != nil:
-		seller, err := s.ValidateAssignmentSeller(ctx, *input.SellerID)
-		if err != nil {
-			return err
+		if input.AutoAccept {
+			contract.AssignmentStatus = models.AssignmentStatusAccepted
+			contract.RespondedAt = &now
+			contract.AcceptDeadlineAt = nil
+		} else {
+			deadline := s.assignmentDeadline(ctx, now)
+			contract.AssignmentStatus = models.AssignmentStatusPending
+			contract.AcceptDeadlineAt = &deadline
 		}
-		deadline := s.assignmentDeadline(ctx, now)
-		contract.SellerID = &seller.ID
-		contract.AssignmentOrigin = models.AssignmentOriginManual
-		contract.AssignmentStatus = models.AssignmentStatusPending
-		contract.AssignedAt = &now
-		contract.AcceptDeadlineAt = &deadline
 	default:
 		contract.AssignmentOrigin = models.AssignmentOriginAutomatic
 		contract.AssignmentStatus = models.AssignmentStatusNone

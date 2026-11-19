@@ -253,6 +253,17 @@ func (h *ContractHandler) CreateGuest(c *gin.Context) {
 	h.create(c, lot.ID, true)
 }
 
+// reservationAssignmentInput resolves the assignment fields for a reservation
+// created from the back office. A seller can only assign the reservation to
+// themselves and it is accepted immediately; admins keep the explicit choice.
+func reservationAssignmentInput(role string, creatorID uint, origin string, sellerID *uint) (string, *uint, bool) {
+	if role != models.RoleSeller || creatorID == 0 {
+		return origin, sellerID, false
+	}
+	self := creatorID
+	return models.AssignmentOriginManual, &self, true
+}
+
 func (h *ContractHandler) create(c *gin.Context, lotID uint, guest bool) {
 	creatorID := middleware.GetUserID(c)
 
@@ -304,6 +315,9 @@ func (h *ContractHandler) create(c *gin.Context, lotID uint, guest bool) {
 		value := uint(parsed)
 		requestedSellerID = &value
 	}
+	assignmentOrigin, requestedSellerID, autoAcceptAssignment := reservationAssignmentInput(
+		middleware.GetUserRole(c), creatorID, assignmentOrigin, requestedSellerID,
+	)
 	attributionCookie, _ := c.Cookie(services.ReferralAttributionCookieName)
 
 	// Validate and parse max_payment_date. Cash reservations require it because
@@ -510,6 +524,7 @@ func (h *ContractHandler) create(c *gin.Context, lotID uint, guest bool) {
 		SellerID:          requestedSellerID,
 		ReferralGUID:      referralGUID,
 		AttributionCookie: attributionCookie,
+		AutoAccept:        autoAcceptAssignment,
 	}); err != nil {
 		if errors.Is(err, services.ErrAssignmentSellerInactive) {
 			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "El vendedor seleccionado no está activo", "code": "SELLER_INACTIVE"})

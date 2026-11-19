@@ -789,6 +789,34 @@ func floatPtrForTest(value float64) *float64 { return &value }
 
 func stringPtrForHandlerTest(value string) *string { return &value }
 
+func TestReservationAssignmentInput(t *testing.T) {
+	otherSeller := uint(42)
+
+	t.Run("seller is assigned to self and accepted", func(t *testing.T) {
+		origin, sellerID, autoAccept := reservationAssignmentInput(
+			models.RoleSeller, 7, models.AssignmentOriginReferral, &otherSeller,
+		)
+
+		assert.Equal(t, models.AssignmentOriginManual, origin)
+		if assert.NotNil(t, sellerID) {
+			assert.Equal(t, uint(7), *sellerID)
+		}
+		assert.True(t, autoAccept)
+	})
+
+	t.Run("admin keeps the explicit seller", func(t *testing.T) {
+		origin, sellerID, autoAccept := reservationAssignmentInput(
+			models.RoleAdmin, 1, models.AssignmentOriginManual, &otherSeller,
+		)
+
+		assert.Equal(t, models.AssignmentOriginManual, origin)
+		if assert.NotNil(t, sellerID) {
+			assert.Equal(t, otherSeller, *sellerID)
+		}
+		assert.False(t, autoAccept)
+	})
+}
+
 func TestCreateGuestRejectsNonCustomerRoles(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	handler := &ContractHandler{}
