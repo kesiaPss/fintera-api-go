@@ -35,6 +35,11 @@ func (h *CommissionHandler) ShowRules(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	if !middleware.IsAdmin(c) {
+		if rate, rateErr := h.commissions.ResolveHistoricalRate(c.Request.Context(), middleware.GetUserID(c)); rateErr == nil {
+			rules.SellerRate = &rate
+		}
+	}
 	c.JSON(http.StatusOK, gin.H{"rules": rules})
 }
 

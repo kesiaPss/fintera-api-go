@@ -173,7 +173,9 @@ func (s *HistoricalSaleService) Update(ctx context.Context, id, actorID uint, in
 	sale.PaymentMode = updated.PaymentMode
 	sale.SaleStatus = updated.SaleStatus
 	sale.InstallmentsPaid = updated.InstallmentsPaid
-	sale.Rate = updated.Rate
+	if updated.Rate != nil {
+		sale.Rate = updated.Rate
+	}
 	sale.EvidenceFile = updated.EvidenceFile
 	if input.CommissionStatus != nil {
 		sale.CommissionStatus = normalizeCommissionStatus(*input.CommissionStatus)
@@ -208,6 +210,22 @@ func (s *HistoricalSaleService) Update(ctx context.Context, id, actorID uint, in
 // List returns the historical sales visible to the caller.
 func (s *HistoricalSaleService) List(ctx context.Context, query *repository.HistoricalSaleQuery) ([]models.HistoricalSale, int64, error) {
 	return s.repo.List(ctx, query)
+}
+
+// Get returns one historical sale. Sellers can only read their own records;
+// admins can read any record.
+func (s *HistoricalSaleService) Get(ctx context.Context, id, actorID uint, isAdmin bool) (*models.HistoricalSale, error) {
+	sale, err := s.repo.FindByIDWithDetails(ctx, id)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrHistoricalSaleNotFound
+		}
+		return nil, err
+	}
+	if !isAdmin && sale.CreatedBy != actorID {
+		return nil, ErrHistoricalSaleForbidden
+	}
+	return sale, nil
 }
 
 // Validate marks a historical sale as validated. It never creates a reservation.
@@ -410,8 +428,8 @@ func (s *HistoricalSaleService) ImportCSV(ctx context.Context, actorID uint, rea
 func HistoricalSalesCSVTemplate() string {
 	buffer := &bytes.Buffer{}
 	writer := csv.NewWriter(buffer)
-	_ = writer.Write([]string{"nombre", "identidad", "proyecto", "lote", "area_m2", "precio", "fecha_venta", "telefono", "email", "forma_pago", "estado_venta"})
-	_ = writer.Write([]string{"María López", "0801-1990-12345", "Residencial Los Pinos", "Lote 12", "500", "750000", "2023-05-15", "9999-8888", "maria@example.com", "financiado", "en_cuotas"})
+	_ = writer.Write([]string{"nombre", "identidad", "proyecto", "lote", "area_m2", "precio", "fecha_venta", "telefono", "email", "forma_pago", "estado_venta", "tasa", "comision"})
+	_ = writer.Write([]string{"María López", "0801-1990-12345", "Residencial Los Pinos", "Lote 12", "500", "750000", "2023-05-15", "9999-8888", "maria@example.com", "financiado", "en_cuotas", "5", "37500"})
 	writer.Flush()
 	return buffer.String()
 }

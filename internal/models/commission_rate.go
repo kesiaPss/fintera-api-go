@@ -66,10 +66,11 @@ func DefaultCommissionSettings() CommissionSettings {
 
 // CommissionRulesResponse is the admin/seller view of the global rules.
 type CommissionRulesResponse struct {
-	DefaultRate           float64 `json:"default_rate"`
-	UnassignedRate        float64 `json:"unassigned_rate"`
-	PaymentRule           string  `json:"payment_rule"`
-	AcceptanceWindowHours int     `json:"acceptance_window_hours"`
+	DefaultRate           float64  `json:"default_rate"`
+	UnassignedRate        float64  `json:"unassigned_rate"`
+	PaymentRule           string   `json:"payment_rule"`
+	AcceptanceWindowHours int      `json:"acceptance_window_hours"`
+	SellerRate            *float64 `json:"seller_rate,omitempty"`
 }
 
 // CommissionExceptionResponse is one per-seller rate exception.

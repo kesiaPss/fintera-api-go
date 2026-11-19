@@ -2436,6 +2436,34 @@ paths:
       tags:
       - HistoricalSales
   /historical_sales/{id}:
+    get:
+      description: Historical sale visible to the caller. Sellers see their own; admins
+        see any.
+      parameters:
+      - description: Historical sale ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Get historical sale
+      tags:
+      - HistoricalSales
     put:
       consumes:
       - application/json

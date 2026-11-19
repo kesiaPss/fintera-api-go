@@ -85,6 +85,30 @@ func (h *HistoricalSaleHandler) Index(c *gin.Context) {
 	})
 }
 
+// Show returns one historical sale. Sellers can only read their own records;
+// admins can read any record.
+// @Summary Get historical sale
+// @Description Historical sale visible to the caller. Sellers see their own; admins see any.
+// @Tags HistoricalSales
+// @Produce json
+// @Param id path int true "Historical sale ID"
+// @Success 200 {object} map[string]interface{}
+// @Failure 404 {object} map[string]string
+// @Security BearerAuth
+// @Router /historical_sales/{id} [get]
+func (h *HistoricalSaleHandler) Show(c *gin.Context) {
+	id, ok := parseHistoricalSaleID(c)
+	if !ok {
+		return
+	}
+	sale, err := h.historical.Get(c.Request.Context(), id, middleware.GetUserID(c), middleware.IsAdmin(c))
+	if err != nil {
+		writeHistoricalSaleError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"historical_sale": sale.ToResponse()})
+}
+
 // Create records one historical sale for the authenticated seller.
 // @Summary Create historical sale
 // @Description Record a migrated sale. It never creates a reservation or blocks a lot.

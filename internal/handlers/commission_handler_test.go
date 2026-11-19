@@ -21,8 +21,26 @@ import (
 // operations used by the commission handler tests.
 type commissionRepoStub struct {
 	repository.CommissionRepository
-	credit  *models.SellerCommissionCredit
-	settled bool
+	credit      *models.SellerCommissionCredit
+	settled     bool
+	settings    *models.CommissionSettings
+	sellerRates map[uint]float64
+}
+
+func (s *commissionRepoStub) GetSettings(_ context.Context) (*models.CommissionSettings, error) {
+	if s.settings != nil {
+		copy := *s.settings
+		return &copy, nil
+	}
+	defaults := models.DefaultCommissionSettings()
+	return &defaults, nil
+}
+
+func (s *commissionRepoStub) FindSellerRate(_ context.Context, sellerID uint) (*models.SellerCommissionRate, error) {
+	if rate, ok := s.sellerRates[sellerID]; ok {
+		return &models.SellerCommissionRate{SellerID: sellerID, Rate: rate}, nil
+	}
+	return nil, gorm.ErrRecordNotFound
 }
 
 func (s *commissionRepoStub) FindCreditByID(_ context.Context, id uint) (*models.SellerCommissionCredit, error) {
@@ -64,6 +82,7 @@ func newCommissionTestRouter(handler *CommissionHandler, role string, userID uin
 	})
 	router.POST("/commissions/credits/:id/apply", handler.ApplyCredit)
 	router.GET("/commissions/credits", handler.ListCredits)
+	router.GET("/commissions/rules", handler.ShowRules)
 	return router
 }
 
@@ -126,6 +145,42 @@ func TestCommissionHandler_ApplyCredit_AlreadySettled(t *testing.T) {
 	router.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusConflict, rec.Code)
+}
+
+func TestCommissionHandler_ShowRulesIncludesSellerRate(t *testing.T) {
+	repo := &commissionRepoStub{sellerRates: map[uint]float64{8: 6}}
+	handler := NewCommissionHandler(services.NewCommissionService(repo, nil, nil))
+	router := newCommissionTestRouter(handler, "seller", 8)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/commissions/rules", nil)
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var body struct {
+		Rules models.CommissionRulesResponse `json:"rules"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.NotNil(t, body.Rules.SellerRate)
+	assert.InDelta(t, 6.0, *body.Rules.SellerRate, 0.01)
+	assert.InDelta(t, 5.0, body.Rules.DefaultRate, 0.01)
+}
+
+func TestCommissionHandler_ShowRulesOmitsSellerRateForAdmin(t *testing.T) {
+	repo := &commissionRepoStub{sellerRates: map[uint]float64{3: 6}}
+	handler := NewCommissionHandler(services.NewCommissionService(repo, nil, nil))
+	router := newCommissionTestRouter(handler, "admin", 3)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/commissions/rules", nil)
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var body struct {
+		Rules models.CommissionRulesResponse `json:"rules"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Nil(t, body.Rules.SellerRate)
 }
 
 func TestCommissionHandler_ListCreditsFiltersForSellers(t *testing.T) {

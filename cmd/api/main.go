@@ -441,6 +441,7 @@ func setupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 				// Historical sales: sellers manage their own records, admins can
 				// list every record. Validation is admin-only (above).
 				sellerAdmin.GET("/historical_sales", h.HistoricalSale.Index)
+				sellerAdmin.GET("/historical_sales/:id", h.HistoricalSale.Show)
 				sellerAdmin.POST("/historical_sales", h.HistoricalSale.Create)
 				sellerAdmin.PUT("/historical_sales/:id", h.HistoricalSale.Update)
 				sellerAdmin.POST("/historical_sales/import", h.HistoricalSale.Import)
