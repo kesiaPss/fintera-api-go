@@ -497,6 +497,92 @@ func TestContractService_CreateWithAssignmentUsesReferralGUID(t *testing.T) {
 	assert.Equal(t, models.AssignmentStatusAccepted, contract.AssignmentStatus)
 }
 
+func TestContractService_CreateWithAssignmentAutoAcceptsSellerCreator(t *testing.T) {
+	logger.Setup("test")
+
+	ctx := context.Background()
+	contractRepo := new(mockContractRepo)
+	lotRepo := new(mockLotRepo)
+	userRepo := new(mockUserRepoForContract)
+	paymentRepo := new(mockPaymentRepo)
+	ledgerRepo := new(mockLedgerRepo)
+
+	gdb, mockSQL := setupMockDB(t)
+	mockSQL.ExpectQuery(`INSERT INTO "audit_logs"`).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
+
+	auditSvc := NewAuditService(gdb)
+	worker := jobs.NewWorker(1)
+	t.Cleanup(func() { _ = worker.Shutdown(context.Background()) })
+
+	service := NewContractService(
+		contractRepo,
+		lotRepo,
+		userRepo,
+		paymentRepo,
+		ledgerRepo,
+		NewNotificationService(nil, nil),
+		NewEmailService(&config.Config{EnableEmailNotifications: false}),
+		auditSvc,
+		worker,
+	)
+
+	seller := &models.User{
+		ID:         9,
+		FullName:   "Carlos Ruiz",
+		Role:       models.RoleSeller,
+		Status:     models.StatusActive,
+		ScoreLevel: models.ScoreLevelHigh,
+	}
+	assignmentRepo := newFakeAssignmentRepo()
+	assignmentSvc := newTestAssignmentService(assignmentRepo, seller)
+	service.SetAssignmentServices(nil, assignmentSvc)
+
+	lot := &models.Lot{
+		ID:     1,
+		Status: models.LotStatusAvailable,
+		Price:  10000,
+		Project: models.Project{
+			Name: "Test Project",
+		},
+	}
+	creatorID := seller.ID
+	contract := &models.Contract{
+		ID:              7,
+		LotID:           1,
+		ApplicantUserID: 2,
+		CreatorID:       &creatorID,
+	}
+	applicant := &models.User{ID: 2, FullName: "Test User"}
+
+	lotRepo.On("FindByID", ctx, uint(1)).Return(lot, nil)
+	lotRepo.On("ReserveIfAvailable", ctx, uint(1)).Return(true, nil)
+	contractRepo.On("Create", ctx, mock.AnythingOfType("*models.Contract")).Return(nil)
+	userRepo.On("FindByID", ctx, uint(2)).Return(applicant, nil)
+
+	err := service.CreateWithAssignment(ctx, contract, ContractAssignmentInput{
+		Origin:     models.AssignmentOriginManual,
+		SellerID:   &seller.ID,
+		AutoAccept: true,
+	})
+
+	assert.NoError(t, err)
+	if assert.NotNil(t, contract.SellerID) {
+		assert.Equal(t, seller.ID, *contract.SellerID)
+	}
+	assert.Equal(t, models.AssignmentOriginManual, contract.AssignmentOrigin)
+	assert.Equal(t, models.AssignmentStatusAccepted, contract.AssignmentStatus)
+	assert.Nil(t, contract.AcceptDeadlineAt)
+	if assert.NotNil(t, contract.RespondedAt) {
+		assert.False(t, contract.RespondedAt.IsZero())
+	}
+
+	assignment := assignmentRepo.assignments[1]
+	if assert.NotNil(t, assignment) {
+		assert.Equal(t, seller.ID, assignment.SellerID)
+		assert.Equal(t, models.AssignmentStatusAccepted, assignment.Status)
+	}
+}
+
 func TestContractService_Reject(t *testing.T) {
 	// Initialize logger to avoid nil pointer dereference
 	logger.Setup("test")
