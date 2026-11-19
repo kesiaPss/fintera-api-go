@@ -1,6 +1,6 @@
 module github.com/sjperalta/fintera-api
 
-go 1.27.3
+go 1.27.4
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
@@ -14,6 +14,7 @@ require (
 	github.com/joho/godotenv v1.5.1
 	github.com/jung-kurt/gofpdf v1.16.2
 	github.com/looplab/fsm v1.0.3
+	github.com/mayahiro/go-webp v0.4.0
 	github.com/microcosm-cc/bluemonday v1.0.27
 	github.com/resend/resend-go/v2 v2.28.0
 	github.com/rollbar/rollbar-go v1.4.8
@@ -23,6 +24,7 @@ require (
 	github.com/swaggo/swag v1.16.6
 	github.com/xuri/excelize/v2 v2.11.1
 	golang.org/x/crypto v0.58.0
+	golang.org/x/image v0.45.0
 	golang.org/x/net v0.62.0
 	gorm.io/driver/postgres v1.6.0
 	gorm.io/gorm v1.31.1
@@ -80,7 +82,6 @@ require (
 	github.com/xuri/nfp v0.0.2-0.20250530014748-2ddeb826f9a9 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/arch v0.22.0 // indirect
-	golang.org/x/image v0.44.0 // indirect
 	golang.org/x/mod v0.41.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect

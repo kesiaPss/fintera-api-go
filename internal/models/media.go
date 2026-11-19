@@ -15,6 +15,9 @@ const (
 	DrawingTypePNG  = "png"
 	DrawingTypeJPG  = "jpg"
 	DrawingTypeJPEG = "jpeg"
+	// DrawingTypeWebP is the stored type for raster plans that were transcoded
+	// to WebP on upload.
+	DrawingTypeWebP = "webp"
 )
 
 // ProjectDrawing is a CAD/document plan published for a project.

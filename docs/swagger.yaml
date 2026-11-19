@@ -2918,7 +2918,8 @@ paths:
     post:
       consumes:
       - multipart/form-data
-      description: Upload payment receipt image/pdf
+      description: Upload payment receipt image/pdf. Image receipts are converted
+        to WebP; PDFs are stored unchanged.
       parameters:
       - description: Payment ID
         in: path
@@ -3293,6 +3294,7 @@ paths:
       consumes:
       - multipart/form-data
       description: Upload one or more plans (svg, png, jpg, jpeg, pdf; max 50 MB each).
+        Raster plans are converted to WebP; SVG/PDF are stored unchanged.
       parameters:
       - description: Project ID
         in: path
@@ -3922,7 +3924,8 @@ paths:
     post:
       consumes:
       - multipart/form-data
-      description: Upload receipt for a contract payment
+      description: Upload receipt for a contract payment. Image receipts are converted
+        to WebP; PDFs are stored unchanged.
       parameters:
       - description: Contract ID
         in: path
@@ -4070,7 +4073,8 @@ paths:
     post:
       consumes:
       - multipart/form-data
-      description: Upload lot gallery photos (jpeg, png, webp; max 10 MB each).
+      description: Upload lot gallery photos (jpeg, png, webp; max 10 MB each). Images
+        are converted to WebP and thumbnails are generated server-side.
       parameters:
       - description: Project ID
         in: path
@@ -4087,7 +4091,7 @@ paths:
         name: photos
         required: true
         type: file
-      - description: Optional thumbnails
+      - description: 'Deprecated: server generates thumbnails'
         in: formData
         name: thumbs
         type: file
@@ -4267,6 +4271,7 @@ paths:
       consumes:
       - multipart/form-data
       description: Upload project gallery photos (jpeg, png, webp; max 10 MB each).
+        Images are converted to WebP and thumbnails are generated server-side.
       parameters:
       - description: Project ID
         in: path
@@ -4278,7 +4283,7 @@ paths:
         name: photos
         required: true
         type: file
-      - description: Optional thumbnails
+      - description: 'Deprecated: server generates thumbnails'
         in: formData
         name: thumbs
         type: file

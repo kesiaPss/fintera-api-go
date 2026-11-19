@@ -3,6 +3,7 @@ package handlers
 import (
 	"errors"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"strconv"
 
@@ -22,6 +23,23 @@ type PaymentHandler struct {
 
 func NewPaymentHandler(paymentService *services.PaymentService, storage *storage.LocalStorage) *PaymentHandler {
 	return &PaymentHandler{paymentService: paymentService, storage: storage}
+}
+
+// saveReceipt stores an uploaded receipt. PDF receipts are documents and are
+// stored unchanged; raster images are transcoded to WebP to save space.
+func (h *PaymentHandler) saveReceipt(file multipart.File, header *multipart.FileHeader) (string, error) {
+	if strings.ToLower(header.Header.Get("Content-Type")) == "application/pdf" {
+		return h.storage.Upload(file, header, "receipts")
+	}
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return "", err
+	}
+	webpData, err := services.ReceiptToWebP(data)
+	if err != nil {
+		return "", err
+	}
+	return h.storage.UploadFromBytes(webpData, "receipt.webp", "receipts")
 }
 
 // @Summary List Payments
@@ -235,7 +253,7 @@ func (h *PaymentHandler) Reject(c *gin.Context) {
 }
 
 // @Summary Upload Receipt
-// @Description Upload payment receipt image/pdf
+// @Description Upload payment receipt image/pdf. Image receipts are converted to WebP; PDFs are stored unchanged.
 // @Tags Payments
 // @Accept multipart/form-data
 // @Produce json
@@ -296,7 +314,7 @@ func (h *PaymentHandler) UploadReceipt(c *gin.Context) {
 		return
 	}
 
-	path, err := h.storage.Upload(file, header, "receipts")
+	path, err := h.saveReceipt(file, header)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error al guardar archivo"})
 		return
@@ -349,7 +367,7 @@ func (h *PaymentHandler) UploadPublicReservationReceipt(c *gin.Context) {
 		return
 	}
 
-	path, err := h.storage.Upload(file, header, "receipts")
+	path, err := h.saveReceipt(file, header)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error al guardar archivo"})
 		return
@@ -516,7 +534,7 @@ func (h *PaymentHandler) RejectByContract(c *gin.Context) {
 }
 
 // @Summary Upload Contract Payment Receipt
-// @Description Upload receipt for a contract payment
+// @Description Upload receipt for a contract payment. Image receipts are converted to WebP; PDFs are stored unchanged.
 // @Tags Payments
 // @Accept multipart/form-data
 // @Produce json

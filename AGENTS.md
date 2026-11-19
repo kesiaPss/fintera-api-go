@@ -4,7 +4,7 @@ Guidance for AI agents and contributors working in this repository.
 
 ## What this repo is
 
-Fintera API: a Go 1.27.3 / Gin / GORM REST backend for real-estate contract
+Fintera API: a Go 1.27.4 / Gin / GORM REST backend for real-estate contract
 management, migrated from Ruby on Rails. It manages users, projects, lots,
 contracts, payment schedules, a contract ledger, notifications, reports, and
 scheduled background work.

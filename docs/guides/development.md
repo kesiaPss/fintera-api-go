@@ -4,7 +4,7 @@
 
 | Tool | Purpose | Required |
 | --- | --- | --- |
-| Go 1.27.3+ | Build and test | yes |
+| Go 1.27.4+ | Build and test | yes |
 | PostgreSQL | Database | yes |
 | `golang-migrate` | Apply migrations | yes for local DB work |
 | `psql` | Seeds and DB inspection | yes for reset/seed targets |
