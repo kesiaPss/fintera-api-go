@@ -455,6 +455,7 @@ func (s *HistoricalSaleService) ImportCSV(ctx context.Context, actorID uint, rea
 // HistoricalSalesCSVTemplate returns the canonical import template.
 func HistoricalSalesCSVTemplate() string {
 	buffer := &bytes.Buffer{}
+	buffer.WriteString("\uFEFF") // UTF-8 BOM so Excel detects the encoding
 	writer := csv.NewWriter(buffer)
 	_ = writer.Write([]string{"nombre", "identidad", "proyecto", "lote", "area_m2", "precio", "fecha_venta", "telefono", "email", "forma_pago", "estado_venta", "tasa", "comision"})
 	_ = writer.Write([]string{"María López", "0801-1990-12345", "Residencial Los Pinos", "Lote 12", "500", "750000", "2023-05-15", "9999-8888", "maria@example.com", "financiado", "en_cuotas", "5", "37500"})
@@ -629,6 +630,7 @@ func parseHistoricalDate(value string) (time.Time, error) {
 		"02-01-2006",
 		"2006-1-2",
 		"2/1/2006",
+		"1/2/2006", // M/D/YYYY (US style, e.g. 5/15/2023)
 		time.RFC3339,
 	}
 	for _, layout := range layouts {
