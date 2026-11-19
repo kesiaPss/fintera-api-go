@@ -1796,6 +1796,48 @@
             }
         },
         "/historical_sales/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Historical sale visible to the caller. Sellers see their own; admins see any.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "HistoricalSales"
+                ],
+                "summary": "Get historical sale",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Historical sale ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
             "put": {
                 "security": [
                     {

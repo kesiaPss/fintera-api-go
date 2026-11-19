@@ -157,6 +157,52 @@ func TestHistoricalSaleCreateIsPendingAndUsesSaleDate(t *testing.T) {
 	assert.ErrorIs(t, err, ErrHistoricalSaleDuplicate, "identity and sale date identify a duplicate")
 }
 
+func TestHistoricalSaleGetScopesByOwner(t *testing.T) {
+	repo := newFakeHistoricalSaleRepository()
+	service := NewHistoricalSaleService(repo, nil, nil)
+	ctx := context.Background()
+
+	sale, err := service.Create(ctx, 4, sampleHistoricalInput("333", "2023-03-10"), "", "")
+	require.NoError(t, err)
+
+	own, err := service.Get(ctx, sale.ID, 4, false)
+	require.NoError(t, err)
+	assert.Equal(t, sale.ID, own.ID)
+
+	_, err = service.Get(ctx, sale.ID, 5, false)
+	assert.ErrorIs(t, err, ErrHistoricalSaleForbidden)
+
+	admin, err := service.Get(ctx, sale.ID, 1, true)
+	require.NoError(t, err)
+	assert.Equal(t, sale.ID, admin.ID)
+
+	_, err = service.Get(ctx, 9999, 4, false)
+	assert.ErrorIs(t, err, ErrHistoricalSaleNotFound)
+}
+
+func TestHistoricalSaleUpdateKeepsRateWhenOmitted(t *testing.T) {
+	repo := newFakeHistoricalSaleRepository()
+	service := NewHistoricalSaleService(repo, nil, nil)
+	ctx := context.Background()
+
+	sale, err := service.Create(ctx, 4, sampleHistoricalInput("444", "2023-04-10"), "", "")
+	require.NoError(t, err)
+	require.NotNil(t, sale.Rate)
+
+	amount := 12000.0
+	updated, err := service.Update(ctx, sale.ID, 4, HistoricalSaleInput{
+		FullName:         stringPtrForTest("Cliente Histórico"),
+		Identity:         stringPtrForTest("444"),
+		SalePrice:        floatPtrForTest(200000),
+		SaleDate:         stringPtrForTest("2023-04-10"),
+		CommissionAmount: &amount,
+	}, false, "", "")
+	require.NoError(t, err)
+	require.NotNil(t, updated.Rate)
+	assert.InDelta(t, 5.0, *updated.Rate, 0.01)
+	assert.InDelta(t, 12000.0, updated.CommissionAmount, 0.01)
+}
+
 func TestHistoricalSaleAdminValidation(t *testing.T) {
 	repo := newFakeHistoricalSaleRepository()
 	service := NewHistoricalSaleService(repo, nil, nil)
