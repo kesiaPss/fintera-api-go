@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bytes"
 	"encoding/csv"
 	"strings"
 	"testing"
@@ -93,6 +94,73 @@ func TestParseProjectCSVHandlesAliasesQuotesAndMultilineFields(t *testing.T) {
 	}
 	if project.DeliveryDate == nil || *project.DeliveryDate != "2027-01-31" {
 		t.Fatalf("delivery date = %v", project.DeliveryDate)
+	}
+}
+
+func TestParseProjectCSVSemicolonDelimited(t *testing.T) {
+	body := "nombre;direccion;precio_m2;lotes\n" +
+		"Altos;Calle 1;1500;4\n"
+
+	records, err := ParseProjectCSV(strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("ParseProjectCSV: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("records = %d, want 1", len(records))
+	}
+
+	project, err := records[0].BuildProject()
+	if err != nil {
+		t.Fatalf("BuildProject: %v", err)
+	}
+	if project.Name != "Altos" || project.PricePerSquareUnit != 1500 || project.LotCount != 4 {
+		t.Fatalf("unexpected project: %+v", project)
+	}
+}
+
+func TestParseProjectCSVWindows1252(t *testing.T) {
+	body := []byte("nombre,direccion,precio_m2,ciudad\nAltos,Calle 1,1500,Panam\xe1\n")
+
+	records, err := ParseProjectCSV(bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("ParseProjectCSV: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("records = %d, want 1", len(records))
+	}
+
+	project, err := records[0].BuildProject()
+	if err != nil {
+		t.Fatalf("BuildProject: %v", err)
+	}
+	if project.City == nil || *project.City != "Panamá" {
+		t.Fatalf("city = %v, want Panamá", project.City)
+	}
+}
+
+func TestParseProjectCSVAcceptsUISpanishTemplate(t *testing.T) {
+	body := "nombre,codigo,direccion,ciudad,precio_m2,lotes,unidad,tipo,fecha_entrega,descripcion,tasa_interes,comision_directa,comision_banco,comision_contado\n" +
+		"Proyecto Ejemplo,EJ-001,\"Calle 50, Ciudad de Panamá\",Ciudad de Panamá,1200,10,m2,residential,2027-06-30,\"Proyecto de ejemplo; reemplaza o elimina esta fila.\",0,0,0,0\n"
+
+	records, err := ParseProjectCSV(strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("ParseProjectCSV: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("records = %d, want 1", len(records))
+	}
+
+	project, err := records[0].BuildProject()
+	if err != nil {
+		t.Fatalf("BuildProject: %v", err)
+	}
+	if project.Name != "Proyecto Ejemplo" || project.Code == nil || *project.Code != "EJ-001" {
+		t.Fatalf("unexpected template project: %+v", project)
+	}
+	if project.InterestRate != 0 || project.CommissionRateDirect != 0 ||
+		project.CommissionRateBank != 0 || project.CommissionRateCash != 0 {
+		t.Fatalf("rates = %v/%v/%v/%v, want zero",
+			project.InterestRate, project.CommissionRateDirect, project.CommissionRateBank, project.CommissionRateCash)
 	}
 }
 

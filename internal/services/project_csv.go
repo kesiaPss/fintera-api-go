@@ -10,6 +10,9 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
+
+	"golang.org/x/text/encoding/charmap"
 
 	"github.com/sjperalta/fintera-api/internal/models"
 )
@@ -160,11 +163,79 @@ func ProjectCSVTemplate() string {
 	return buffer.String()
 }
 
-// ParseProjectCSV parses a CSV file into canonical records. Request-level
-// problems (unreadable file, malformed CSV, missing required headers) are
-// returned as errors; row-level problems are reported later by BuildProject.
+var projectCSVUTF8BOM = []byte{0xEF, 0xBB, 0xBF}
+
+// decodeProjectCSV normalizes the uploaded bytes to UTF-8. Files that are not
+// valid UTF-8 are treated as Windows-1252, which is the encoding Excel usually
+// produces for Spanish-locale CSV exports.
+func decodeProjectCSV(reader io.Reader) ([]byte, error) {
+	raw, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, fmt.Errorf("no se pudo leer el archivo CSV: %w", err)
+	}
+	raw = bytes.TrimPrefix(raw, projectCSVUTF8BOM)
+	if utf8.Valid(raw) {
+		return raw, nil
+	}
+
+	decoded, err := charmap.Windows1252.NewDecoder().Bytes(raw)
+	if err != nil {
+		return nil, fmt.Errorf("codificación CSV no soportada: %w", err)
+	}
+	return decoded, nil
+}
+
+// detectProjectCSVDelimiter inspects the header line and picks the delimiter
+// that appears most often outside quotes. Ties default to a comma.
+func detectProjectCSVDelimiter(data []byte) rune {
+	header := data
+	if index := bytes.IndexByte(header, '\n'); index >= 0 {
+		header = header[:index]
+	}
+	header = bytes.TrimSuffix(header, []byte{'\r'})
+
+	commas := 0
+	semicolons := 0
+	quoted := false
+	for index := 0; index < len(header); index++ {
+		switch header[index] {
+		case '"':
+			if quoted && index+1 < len(header) && header[index+1] == '"' {
+				index++
+			} else {
+				quoted = !quoted
+			}
+		case ',':
+			if !quoted {
+				commas++
+			}
+		case ';':
+			if !quoted {
+				semicolons++
+			}
+		}
+	}
+
+	if semicolons > commas {
+		return ';'
+	}
+	return ','
+}
+
+// ParseProjectCSV parses a comma- or semicolon-delimited CSV file into
+// canonical records. UTF-8 (with or without BOM) and Windows-1252 files are
+// accepted. Request-level problems (unreadable file, malformed CSV, missing
+// required headers) are returned as errors; row-level problems are reported
+// later by BuildProject.
 func ParseProjectCSV(reader io.Reader) ([]ProjectCSVRecord, error) {
-	csvReader := csv.NewReader(reader)
+	data, err := decodeProjectCSV(reader)
+	if err != nil {
+		return nil, err
+	}
+	delimiter := detectProjectCSVDelimiter(data)
+
+	csvReader := csv.NewReader(bytes.NewReader(data))
+	csvReader.Comma = delimiter
 	csvReader.FieldsPerRecord = -1
 	csvReader.TrimLeadingSpace = true
 	csvReader.ReuseRecord = false
