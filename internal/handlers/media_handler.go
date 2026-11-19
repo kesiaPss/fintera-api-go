@@ -78,7 +78,7 @@ func (h *MediaHandler) ListLotPhotos(c *gin.Context) {
 }
 
 // @Summary Upload project drawings
-// @Description Upload one or more plans (svg, png, jpg, jpeg, pdf; max 50 MB each).
+// @Description Upload one or more plans (svg, png, jpg, jpeg, pdf; max 50 MB each). Raster plans are converted to WebP; SVG/PDF are stored unchanged.
 // @Tags Project Media
 // @Accept multipart/form-data
 // @Produce json
@@ -186,13 +186,13 @@ func (h *MediaHandler) DeleteDrawing(c *gin.Context) {
 }
 
 // @Summary Upload project photos
-// @Description Upload project gallery photos (jpeg, png, webp; max 10 MB each).
+// @Description Upload project gallery photos (jpeg, png, webp; max 10 MB each). Images are converted to WebP and thumbnails are generated server-side.
 // @Tags Project Media
 // @Accept multipart/form-data
 // @Produce json
 // @Param project_id path int true "Project ID"
 // @Param photos formData file true "Photo files"
-// @Param thumbs formData file false "Optional thumbnails"
+// @Param thumbs formData file false "Deprecated: server generates thumbnails"
 // @Success 201 {object} map[string]interface{}
 // @Security BearerAuth
 // @Router /projects/{project_id}/photos [post]
@@ -252,14 +252,14 @@ func (h *MediaHandler) UploadProjectPhotos(c *gin.Context) {
 }
 
 // @Summary Upload lot photos
-// @Description Upload lot gallery photos (jpeg, png, webp; max 10 MB each).
+// @Description Upload lot gallery photos (jpeg, png, webp; max 10 MB each). Images are converted to WebP and thumbnails are generated server-side.
 // @Tags Project Media
 // @Accept multipart/form-data
 // @Produce json
 // @Param project_id path int true "Project ID"
 // @Param lot_id path int true "Lot ID"
 // @Param photos formData file true "Photo files"
-// @Param thumbs formData file false "Optional thumbnails"
+// @Param thumbs formData file false "Deprecated: server generates thumbnails"
 // @Success 201 {object} map[string]interface{}
 // @Security BearerAuth
 // @Router /projects/{project_id}/lots/{lot_id}/photos [post]

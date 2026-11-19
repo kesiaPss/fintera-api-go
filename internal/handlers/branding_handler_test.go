@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"image"
+	"image/png"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -38,9 +40,9 @@ type stubBrandingStorage struct {
 	uploaded int
 }
 
-func (s *stubBrandingStorage) Upload(file multipart.File, header *multipart.FileHeader, subDir string) (string, error) {
+func (s *stubBrandingStorage) UploadFromBytes(data []byte, filename, subDir string) (string, error) {
 	s.uploaded++
-	return subDir + "/2026/01/test.png", nil
+	return subDir + "/2026/01/test.webp", nil
 }
 
 func (s *stubBrandingStorage) Delete(relPath string) error { return nil }
@@ -151,8 +153,10 @@ func TestBrandingUploadLogo(t *testing.T) {
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
 	_ = writer.WriteField("variant", "dark")
+	var pngBuf bytes.Buffer
+	_ = png.Encode(&pngBuf, image.NewRGBA(image.Rect(0, 0, 8, 8)))
 	part, _ := writer.CreateFormFile("logo", "logo.png")
-	_, _ = part.Write([]byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'})
+	_, _ = part.Write(pngBuf.Bytes())
 	_ = writer.Close()
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/branding/logo", body)

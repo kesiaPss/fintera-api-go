@@ -3,6 +3,9 @@ package services
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"image"
+	"image/png"
 	"io"
 	"mime/multipart"
 	"os"
@@ -32,18 +35,16 @@ func (r *fakeBrandingRepo) Upsert(ctx context.Context, branding *models.Branding
 
 type fakeBrandingStorage struct {
 	files map[string][]byte
+	next  int
 }
 
 func newFakeBrandingStorage() *fakeBrandingStorage {
 	return &fakeBrandingStorage{files: map[string][]byte{}}
 }
 
-func (s *fakeBrandingStorage) Upload(file multipart.File, header *multipart.FileHeader, subDir string) (string, error) {
-	data, err := io.ReadAll(file)
-	if err != nil {
-		return "", err
-	}
-	relPath := subDir + "/2026/01/" + header.Filename
+func (s *fakeBrandingStorage) UploadFromBytes(data []byte, filename, subDir string) (string, error) {
+	s.next++
+	relPath := fmt.Sprintf("%s/2026/01/%d_%s", subDir, s.next, filename)
 	s.files[relPath] = data
 	return relPath, nil
 }
@@ -77,7 +78,13 @@ func brandingTestFile(t *testing.T, content []byte, filename string) (multipart.
 	return f, &multipart.FileHeader{Filename: filename, Size: info.Size()}
 }
 
-var pngBytes = []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0, 0, 0, 0}
+var pngBytes = func() []byte {
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, image.NewRGBA(image.Rect(0, 0, 8, 8))); err != nil {
+		panic(err)
+	}
+	return buf.Bytes()
+}()
 
 func TestBrandingGetReturnsDefaultsWhenMissing(t *testing.T) {
 	svc := newBrandingTestService(&fakeBrandingRepo{}, newFakeBrandingStorage())

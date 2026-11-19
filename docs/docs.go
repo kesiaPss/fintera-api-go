@@ -2513,7 +2513,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Upload payment receipt image/pdf",
+                "description": "Upload payment receipt image/pdf. Image receipts are converted to WebP; PDFs are stored unchanged.",
                 "consumes": [
                     "multipart/form-data"
                 ],
@@ -3120,7 +3120,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Upload one or more plans (svg, png, jpg, jpeg, pdf; max 50 MB each).",
+                "description": "Upload one or more plans (svg, png, jpg, jpeg, pdf; max 50 MB each). Raster plans are converted to WebP; SVG/PDF are stored unchanged.",
                 "consumes": [
                     "multipart/form-data"
                 ],
@@ -4085,7 +4085,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Upload receipt for a contract payment",
+                "description": "Upload receipt for a contract payment. Image receipts are converted to WebP; PDFs are stored unchanged.",
                 "consumes": [
                     "multipart/form-data"
                 ],
@@ -4311,7 +4311,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Upload lot gallery photos (jpeg, png, webp; max 10 MB each).",
+                "description": "Upload lot gallery photos (jpeg, png, webp; max 10 MB each). Images are converted to WebP and thumbnails are generated server-side.",
                 "consumes": [
                     "multipart/form-data"
                 ],
@@ -4346,7 +4346,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "file",
-                        "description": "Optional thumbnails",
+                        "description": "Deprecated: server generates thumbnails",
                         "name": "thumbs",
                         "in": "formData"
                     }
@@ -4614,7 +4614,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Upload project gallery photos (jpeg, png, webp; max 10 MB each).",
+                "description": "Upload project gallery photos (jpeg, png, webp; max 10 MB each). Images are converted to WebP and thumbnails are generated server-side.",
                 "consumes": [
                     "multipart/form-data"
                 ],
@@ -4642,7 +4642,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "file",
-                        "description": "Optional thumbnails",
+                        "description": "Deprecated: server generates thumbnails",
                         "name": "thumbs",
                         "in": "formData"
                     }

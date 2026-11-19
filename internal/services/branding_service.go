@@ -40,7 +40,7 @@ var (
 
 // BrandingStorage is the subset of file storage the branding service needs
 type BrandingStorage interface {
-	Upload(file multipart.File, header *multipart.FileHeader, subDir string) (string, error)
+	UploadFromBytes(data []byte, filename, subDir string) (string, error)
 	Delete(relativePath string) error
 }
 
@@ -119,7 +119,16 @@ func (s *BrandingService) UpdateLogo(ctx context.Context, variant string, file m
 		return nil, err
 	}
 
-	relPath, err := s.store.Upload(file, header, brandingLogoSubDir)
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return nil, fmt.Errorf("error al leer el logo")
+	}
+	webpData, err := LogoToWebP(data)
+	if err != nil {
+		return nil, ErrInvalidBrandingLogo
+	}
+
+	relPath, err := s.store.UploadFromBytes(webpData, "logo.webp", brandingLogoSubDir)
 	if err != nil {
 		return nil, fmt.Errorf("error al guardar el logo")
 	}

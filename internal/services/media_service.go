@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"mime/multipart"
 	"path/filepath"
 	"sort"
@@ -204,7 +205,7 @@ func (s *MediaService) UploadDrawing(
 		return nil, err
 	}
 
-	path, err := s.storage.Upload(file, header, "uploads/projects")
+	path, fileType, sizeBytes, err := s.storeDrawing(file, header, fileType)
 	if err != nil {
 		return nil, err
 	}
@@ -217,7 +218,7 @@ func (s *MediaService) UploadDrawing(
 		Name:       name,
 		FilePath:   path,
 		FileType:   fileType,
-		SizeBytes:  header.Size,
+		SizeBytes:  sizeBytes,
 		UploadedBy: &actorID,
 	}
 	if version != "" {
@@ -288,8 +289,8 @@ func (s *MediaService) UploadProjectPhoto(
 	projectID, actorID uint,
 	file multipart.File,
 	header *multipart.FileHeader,
-	thumb multipart.File,
-	thumbHeader *multipart.FileHeader,
+	_ multipart.File, // client thumbnails are ignored; the server generates them
+	_ *multipart.FileHeader,
 	alt string,
 ) (*models.ProjectPhoto, error) {
 	if _, err := s.projects.FindByID(ctx, projectID); err != nil {
@@ -303,11 +304,19 @@ func (s *MediaService) UploadProjectPhoto(
 		return nil, err
 	}
 
-	path, err := s.storage.Upload(file, header, "uploads/projects")
+	data, err := io.ReadAll(file)
 	if err != nil {
 		return nil, err
 	}
-	thumbPath, err := s.storeThumb(thumb, thumbHeader, "uploads/projects/thumbs")
+	original, thumbnail, err := PhotoToWebP(data)
+	if err != nil {
+		return nil, err
+	}
+	path, err := s.storage.UploadFromBytes(original, "photo.webp", "uploads/projects")
+	if err != nil {
+		return nil, err
+	}
+	thumbPath, err := s.storage.UploadFromBytes(thumbnail, "photo_thumb.webp", "uploads/projects/thumbs")
 	if err != nil {
 		_ = s.storage.Delete(path)
 		return nil, err
@@ -343,8 +352,8 @@ func (s *MediaService) UploadLotPhoto(
 	lotID, actorID uint,
 	file multipart.File,
 	header *multipart.FileHeader,
-	thumb multipart.File,
-	thumbHeader *multipart.FileHeader,
+	_ multipart.File, // client thumbnails are ignored; the server generates them
+	_ *multipart.FileHeader,
 	alt string,
 ) (*models.LotPhoto, error) {
 	if _, err := s.lots.FindByID(ctx, lotID); err != nil {
@@ -358,11 +367,19 @@ func (s *MediaService) UploadLotPhoto(
 		return nil, err
 	}
 
-	path, err := s.storage.Upload(file, header, "uploads/lots")
+	data, err := io.ReadAll(file)
 	if err != nil {
 		return nil, err
 	}
-	thumbPath, err := s.storeThumb(thumb, thumbHeader, "uploads/lots/thumbs")
+	original, thumbnail, err := PhotoToWebP(data)
+	if err != nil {
+		return nil, err
+	}
+	path, err := s.storage.UploadFromBytes(original, "photo.webp", "uploads/lots")
+	if err != nil {
+		return nil, err
+	}
+	thumbPath, err := s.storage.UploadFromBytes(thumbnail, "photo_thumb.webp", "uploads/lots/thumbs")
 	if err != nil {
 		_ = s.storage.Delete(path)
 		return nil, err
@@ -562,14 +579,41 @@ func (s *MediaService) DeleteLotPhoto(ctx context.Context, lotID, id, actorID ui
 	return nil
 }
 
-func (s *MediaService) storeThumb(file multipart.File, header *multipart.FileHeader, subDir string) (string, error) {
-	if file == nil || header == nil {
-		return "", nil
+// storeDrawing persists a plan. Raster plans (PNG/JPEG) are transcoded to WebP
+// so the stored file is smaller; SVG and PDF plans are stored unchanged. It
+// returns the stored path, the final file type and the stored size in bytes.
+func (s *MediaService) storeDrawing(file multipart.File, header *multipart.FileHeader, fileType string) (string, string, int64, error) {
+	ext := strings.ToLower(filepath.Ext(header.Filename))
+	if !isRasterPlanExt(ext) {
+		path, err := s.storage.Upload(file, header, "uploads/projects")
+		if err != nil {
+			return "", "", 0, err
+		}
+		return path, fileType, header.Size, nil
 	}
-	if err := validatePhoto(header); err != nil {
-		return "", err
+
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return "", "", 0, err
 	}
-	return s.storage.Upload(file, header, subDir)
+	webpData, err := DrawingToWebP(data)
+	if err != nil {
+		return "", "", 0, err
+	}
+	path, err := s.storage.UploadFromBytes(webpData, "plan.webp", "uploads/projects")
+	if err != nil {
+		return "", "", 0, err
+	}
+	return path, models.DrawingTypeWebP, int64(len(webpData)), nil
+}
+
+func isRasterPlanExt(ext string) bool {
+	switch ext {
+	case ".png", ".jpg", ".jpeg":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *MediaService) normalizeProjectPhotos(ctx context.Context, projectID uint) {
