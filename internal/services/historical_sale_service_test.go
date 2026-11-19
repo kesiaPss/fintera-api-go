@@ -404,6 +404,41 @@ func TestHistoricalSaleImportWithoutCommissionLeavesZero(t *testing.T) {
 	assert.Equal(t, 0.0, repo.sales[0].CommissionAmount)
 }
 
+func TestHistoricalSaleImportAcceptsUSStyleDates(t *testing.T) {
+	repo := newFakeHistoricalSaleRepository()
+	service := NewHistoricalSaleService(repo, nil, nil, nil)
+	csv := strings.NewReader(`nombre,identidad,precio,fecha_venta
+Maria Lopez,0801-1990-12345,750000,5/15/2023
+kesia martinez,0708-1999-00515,1000000,6/15/2020
+Marilyn Sosa,0907-1998-00615,750000,7/16/2023
+`)
+
+	result, err := service.ImportCSV(context.Background(), 4, csv, HistoricalImportOptions{
+		SkipDuplicates:         true,
+		CommissionWithSaleDate: false,
+	}, "", "")
+	require.NoError(t, err)
+	assert.Equal(t, 3, result.Valid)
+	assert.Empty(t, result.Errors)
+	require.Len(t, repo.sales, 3)
+	assert.Equal(t, "2023-05-15", repo.sales[0].SaleDate.Format(models.HistoricalSaleDateLayout))
+	assert.Equal(t, "2020-06-15", repo.sales[1].SaleDate.Format(models.HistoricalSaleDateLayout))
+	assert.Equal(t, "2023-07-16", repo.sales[2].SaleDate.Format(models.HistoricalSaleDateLayout))
+}
+
+func TestHistoricalSaleParseDateUSStyle(t *testing.T) {
+	for value, want := range map[string]string{
+		"5/15/2023":  "2023-05-15",
+		"6/15/2020":  "2020-06-15",
+		"7/16/2023":  "2023-07-16",
+		"05/15/2023": "2023-05-15",
+	} {
+		parsed, err := parseHistoricalDate(value)
+		require.NoError(t, err, value)
+		assert.Equal(t, want, parsed.Format(models.HistoricalSaleDateLayout), value)
+	}
+}
+
 func sampleHistoricalInput(identity, saleDate string) HistoricalSaleInput {
 	return HistoricalSaleInput{
 		FullName:  stringPtrForTest("Venta " + identity),
