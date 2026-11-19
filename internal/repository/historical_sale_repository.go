@@ -27,6 +27,10 @@ type HistoricalSaleRepository interface {
 	ListForReport(ctx context.Context, creatorID *uint, startDate, endDate *time.Time) ([]models.HistoricalSale, error)
 	ExistsByIdentity(ctx context.Context, creatorID uint, identity string, saleDate time.Time) (bool, error)
 	UpdateValidation(ctx context.Context, id uint, status string, validatedBy uint, at time.Time, reason *string) error
+	// ListWithoutClientUser returns unlinked records after the given id for the
+	// deployment backfill. Ordering by id keeps the run idempotent and bounded.
+	ListWithoutClientUser(ctx context.Context, afterID uint, limit int) ([]models.HistoricalSale, error)
+	SetClientUser(ctx context.Context, id, userID uint) error
 }
 
 type historicalSaleRepository struct {
@@ -159,4 +163,24 @@ func (r *historicalSaleRepository) UpdateValidation(ctx context.Context, id uint
 			"validated_at":      at,
 			"rejection_reason":  reason,
 		}).Error
+}
+
+func (r *historicalSaleRepository) ListWithoutClientUser(ctx context.Context, afterID uint, limit int) ([]models.HistoricalSale, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	var sales []models.HistoricalSale
+	err := r.db.WithContext(ctx).
+		Where("client_user_id IS NULL AND id > ?", afterID).
+		Order("id ASC").
+		Limit(limit).
+		Find(&sales).Error
+	return sales, err
+}
+
+func (r *historicalSaleRepository) SetClientUser(ctx context.Context, id, userID uint) error {
+	return r.db.WithContext(ctx).
+		Model(&models.HistoricalSale{}).
+		Where("id = ?", id).
+		Update("client_user_id", userID).Error
 }

@@ -160,6 +160,14 @@ func (m *mockUserRepoForContract) Create(ctx context.Context, user *models.User)
 	return args.Error(0)
 }
 
+func (m *mockUserRepoForContract) CreateHistoricalClient(ctx context.Context, user *models.User) error {
+	return nil
+}
+
+func (m *mockUserRepoForContract) CountHistoricalClients(ctx context.Context) (int64, error) {
+	return 0, nil
+}
+
 func (m *mockUserRepoForContract) Update(ctx context.Context, user *models.User) error {
 	args := m.Called(ctx, user)
 	return args.Error(0)

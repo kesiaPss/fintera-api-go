@@ -135,11 +135,17 @@ func (h *UserHandler) Stats(c *gin.Context) {
 	for _, count := range counts {
 		total += count
 	}
+	historical, err := h.userService.CountHistoricalClients(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{
-		"total":  total,
-		"admin":  counts["admin"],
-		"seller": counts["seller"],
-		"user":   counts["user"],
+		"total":      total,
+		"admin":      counts["admin"],
+		"seller":     counts["seller"],
+		"user":       counts["user"],
+		"historical": historical,
 	})
 }
 
@@ -153,6 +159,7 @@ func (h *UserHandler) Stats(c *gin.Context) {
 // @Param search_term query string false "Search by name or email"
 // @Param role query string false "Filter by role"
 // @Param status query string false "Filter by status"
+// @Param historical query string false "Set to 1 to list only historical clients"
 // @Success 200 {object} map[string]interface{}
 // @Failure 500 {object} map[string]string
 // @Security BearerAuth
@@ -174,6 +181,12 @@ func (h *UserHandler) Index(c *gin.Context) {
 		if currentUserID > 0 {
 			query.Filters["created_by"] = strconv.FormatUint(uint64(currentUserID), 10)
 		}
+	}
+
+	// Historical clients are customers created from migrated sales. The flag
+	// lets the admin filter them inside the Clients list.
+	if value := strings.ToLower(strings.TrimSpace(c.Query("historical"))); value == "1" || value == "true" {
+		query.Filters["historical"] = "1"
 	}
 
 	status := c.Query("status")

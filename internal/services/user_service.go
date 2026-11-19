@@ -74,6 +74,12 @@ func (s *UserService) Stats(ctx context.Context) (map[string]int64, error) {
 	return s.repo.CountByRole(ctx)
 }
 
+// CountHistoricalClients returns the number of users created to represent a
+// migrated historical client.
+func (s *UserService) CountHistoricalClients(ctx context.Context) (int64, error) {
+	return s.repo.CountHistoricalClients(ctx)
+}
+
 // CountActiveClientsByCreator returns the number of active clients created by
 // each user in creatorIDs.
 func (s *UserService) CountActiveClientsByCreator(ctx context.Context, creatorIDs []uint) (map[uint]int64, error) {

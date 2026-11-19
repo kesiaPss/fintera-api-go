@@ -1027,6 +1027,8 @@ definitions:
         type: boolean
       full_name:
         type: string
+      historical_client:
+        type: boolean
       id:
         type: integer
       identity:
@@ -1089,6 +1091,8 @@ definitions:
         type: boolean
       full_name:
         type: string
+      historical_client:
+        type: boolean
       id:
         type: integer
       identity:
@@ -5206,6 +5210,10 @@ paths:
       - description: Filter by status
         in: query
         name: status
+        type: string
+      - description: Set to 1 to list only historical clients
+        in: query
+        name: historical
         type: string
       produces:
       - application/json

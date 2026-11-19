@@ -62,6 +62,37 @@ func TestSellerMigrationsContainRequiredColumns(t *testing.T) {
 	}
 }
 
+func TestLinkHistoricalClientsMigration(t *testing.T) {
+	up, err := os.ReadFile(filepath.Join("migrations", "000044_link_historical_clients_to_users.up.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fragment := range []string{
+		"ADD COLUMN IF NOT EXISTS historical_client",
+		"ADD COLUMN IF NOT EXISTS client_user_id",
+		"REFERENCES users(id)",
+		"idx_historical_sales_client_user_id",
+	} {
+		if !strings.Contains(string(up), fragment) {
+			t.Fatalf("000044 up is missing %s", fragment)
+		}
+	}
+
+	down, err := os.ReadFile(filepath.Join("migrations", "000044_link_historical_clients_to_users.down.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fragment := range []string{
+		"DROP INDEX IF EXISTS idx_historical_sales_client_user_id",
+		"DROP COLUMN IF EXISTS client_user_id",
+		"DROP COLUMN IF EXISTS historical_client",
+	} {
+		if !strings.Contains(string(down), fragment) {
+			t.Fatalf("000044 down is missing %s", fragment)
+		}
+	}
+}
+
 func TestSellerReferralGUIDMigration(t *testing.T) {
 	up, err := os.ReadFile(filepath.Join("migrations", "000038_seller_referral_guid.up.sql"))
 	if err != nil {

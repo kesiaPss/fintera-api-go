@@ -41,11 +41,16 @@ GOSEC ?= $(GOBIN)/gosec
 .PHONY: build run dev test test-cover clean deps tools \
 	migrate-up migrate-down migrate-create ensure-migrate \
 	drop-db-seed-migrate drop-db-seed-migrate-force seed \
+	backfill-historical-clients \
 	swagger lint fmt security docker-build docker-run
 
 # Build the application
 build:
 	$(GO) build -o bin/api ./cmd/api
+
+# Link existing historical sales to customer accounts (idempotent)
+backfill-historical-clients:
+	$(GO) run ./cmd/backfill-historical-clients
 
 # Run the application
 run: build

@@ -266,6 +266,14 @@ func (s *userRepoStub) Create(_ context.Context, user *models.User) error {
 	return s.err
 }
 
+func (s *userRepoStub) CreateHistoricalClient(ctx context.Context, user *models.User) error {
+	return s.Create(ctx, user)
+}
+
+func (s *userRepoStub) CountHistoricalClients(context.Context) (int64, error) {
+	return 0, s.err
+}
+
 func (s *userRepoStub) Update(_ context.Context, user *models.User) error {
 	s.updated = append(s.updated, user)
 	return s.err

@@ -18,6 +18,9 @@ type UserRepository interface {
 	FindByEmail(ctx context.Context, email string) (*models.User, error)
 	FindByIdentity(ctx context.Context, identity string) (*models.User, error)
 	Create(ctx context.Context, user *models.User) error
+	// CreateHistoricalClient inserts a migrated customer without an RTN so the
+	// unique RTN index is not hit by multiple clients without a tax id.
+	CreateHistoricalClient(ctx context.Context, user *models.User) error
 	Update(ctx context.Context, user *models.User) error
 	// UpdateCreditScore writes only credit_score and updated_at, leaving all
 	// other user columns untouched.
@@ -30,6 +33,7 @@ type UserRepository interface {
 	FindAdmins(ctx context.Context) ([]models.User, error)
 	FindAll(ctx context.Context) ([]models.User, error)
 	CountByRole(ctx context.Context) (map[string]int64, error)
+	CountHistoricalClients(ctx context.Context) (int64, error)
 	CountActiveClientsByCreator(ctx context.Context, creatorIDs []uint) (map[uint]int64, error)
 }
 
@@ -61,6 +65,15 @@ func (r *userRepository) CountByRole(ctx context.Context) (map[string]int64, err
 		counts[item.Role] = item.Count
 	}
 	return counts, nil
+}
+
+func (r *userRepository) CountHistoricalClients(ctx context.Context) (int64, error) {
+	var total int64
+	err := r.db.WithContext(ctx).
+		Model(&models.User{}).
+		Where("discarded_at IS NULL AND historical_client = ?", true).
+		Count(&total).Error
+	return total, err
 }
 
 // CountActiveClientsByCreator returns, for each creator, how many active users
@@ -154,6 +167,19 @@ func (r *userRepository) Create(ctx context.Context, user *models.User) error {
 	return nil
 }
 
+func (r *userRepository) CreateHistoricalClient(ctx context.Context, user *models.User) error {
+	if err := r.db.WithContext(ctx).Omit("RTN").Create(user).Error; err != nil {
+		if isDuplicateKeyError(err, "users_identity_key") {
+			return errors.New("ya existe un usuario con este documento de identidad")
+		}
+		if isDuplicateKeyError(err, "users_email_key") {
+			return errors.New("ya existe un usuario con este correo electrónico")
+		}
+		return err
+	}
+	return nil
+}
+
 func isDuplicateKeyError(err error, constraintName string) bool {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
@@ -236,6 +262,12 @@ func (r *userRepository) List(ctx context.Context, query *ListQuery) ([]models.U
 	// Apply status filter
 	if query.Filters["status"] != "" {
 		db = db.Where("status = ?", query.Filters["status"])
+	}
+
+	// Historical clients are a subset of role=user. The flag lets the admin
+	// Users page filter them without a second endpoint.
+	if query.Filters["historical"] != "" {
+		db = db.Where("historical_client = ?", true)
 	}
 
 	// Filter by creator (e.g. users created by a specific seller)

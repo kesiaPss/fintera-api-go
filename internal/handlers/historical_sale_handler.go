@@ -307,6 +307,8 @@ func writeHistoricalSaleError(c *gin.Context, err error) {
 		status = http.StatusForbidden
 	case errors.Is(err, services.ErrHistoricalSaleDuplicate):
 		status = http.StatusConflict
+	case errors.Is(err, services.ErrHistoricalClientStaffIdentity):
+		status = http.StatusConflict
 	case errors.Is(err, services.ErrHistoricalSaleInvalid),
 		errors.Is(err, services.ErrInvalidCommissionRate):
 		status = http.StatusUnprocessableEntity

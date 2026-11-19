@@ -62,7 +62,8 @@ func NewServices(repos *repository.Repositories, worker *jobs.Worker, storage *s
 	commissionSvc := NewCommissionService(repos.Commission, repos.User, auditSvc)
 	referralSvc.SetCommissionService(commissionSvc)
 	contractSvc.SetCommissionService(commissionSvc)
-	historicalSvc := NewHistoricalSaleService(repos.HistoricalSale, commissionSvc, auditSvc)
+	historicalClientSvc := NewHistoricalClientService(repos.User, repos.HistoricalSale)
+	historicalSvc := NewHistoricalSaleService(repos.HistoricalSale, commissionSvc, auditSvc, historicalClientSvc)
 
 	userSvc := NewUserService(repos.User, repos.Contract, worker, emailSvc, auditSvc, imageSvc)
 	userSvc.SetSellerService(sellerSvc)

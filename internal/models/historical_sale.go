@@ -24,14 +24,16 @@ type HistoricalSale struct {
 	EvidenceFile     *string    `gorm:"column:evidence_file;size:500" json:"evidence_file"`
 	ValidationStatus string     `gorm:"column:validation_status;size:30;not null;default:pending" json:"validation_status"`
 	RejectionReason  *string    `gorm:"column:rejection_reason;type:text" json:"rejection_reason"`
+	ClientUserID     *uint      `gorm:"column:client_user_id;index" json:"client_user_id"`
 	CreatedBy        uint       `gorm:"column:created_by;not null;index" json:"created_by"`
 	ValidatedBy      *uint      `gorm:"column:validated_by" json:"validated_by"`
 	ValidatedAt      *time.Time `gorm:"column:validated_at" json:"validated_at"`
 	CreatedAt        time.Time  `json:"created_at"`
 	UpdatedAt        time.Time  `json:"updated_at"`
 
-	Creator   *User `gorm:"foreignKey:CreatedBy" json:"creator,omitempty"`
-	Validator *User `gorm:"foreignKey:ValidatedBy" json:"validator,omitempty"`
+	Creator    *User `gorm:"foreignKey:CreatedBy" json:"creator,omitempty"`
+	Validator  *User `gorm:"foreignKey:ValidatedBy" json:"validator,omitempty"`
+	ClientUser *User `gorm:"foreignKey:ClientUserID" json:"client_user,omitempty"`
 }
 
 // TableName specifies the table name for HistoricalSale.
@@ -87,6 +89,7 @@ type HistoricalSaleResponse struct {
 	IsHistorical          bool       `json:"is_historical"`
 	ValidationStatus      string     `json:"validation_status"`
 	RejectionReason       *string    `json:"rejection_reason"`
+	ClientUserID          *uint      `json:"client_user_id"`
 	CreatedBy             uint       `json:"created_by"`
 	CreatorName           string     `json:"creator_name,omitempty"`
 	ValidatedBy           *uint      `json:"validated_by"`
@@ -145,6 +148,7 @@ func (h *HistoricalSale) ToResponse() HistoricalSaleResponse {
 		IsHistorical:          true,
 		ValidationStatus:      validationStatus,
 		RejectionReason:       h.RejectionReason,
+		ClientUserID:          h.ClientUserID,
 		CreatedBy:             h.CreatedBy,
 		CreatorName:           creatorName,
 		ValidatedBy:           h.ValidatedBy,
