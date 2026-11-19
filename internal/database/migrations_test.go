@@ -93,6 +93,33 @@ func TestLinkHistoricalClientsMigration(t *testing.T) {
 	}
 }
 
+func TestBackfillRunsMigration(t *testing.T) {
+	up, err := os.ReadFile(filepath.Join("migrations", "000045_backfill_runs.up.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fragment := range []string{
+		"CREATE TABLE IF NOT EXISTS backfill_runs",
+		"name VARCHAR(120)",
+		"version VARCHAR(80)",
+		"status VARCHAR(20)",
+		"rows_affected BIGINT",
+		"idx_backfill_runs_name_version",
+	} {
+		if !strings.Contains(string(up), fragment) {
+			t.Fatalf("000045 up is missing %s", fragment)
+		}
+	}
+
+	down, err := os.ReadFile(filepath.Join("migrations", "000045_backfill_runs.down.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(down), "DROP TABLE IF EXISTS backfill_runs") {
+		t.Fatalf("000045 down is missing the table drop")
+	}
+}
+
 func TestSellerReferralGUIDMigration(t *testing.T) {
 	up, err := os.ReadFile(filepath.Join("migrations", "000038_seller_referral_guid.up.sql"))
 	if err != nil {

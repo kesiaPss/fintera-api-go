@@ -18,10 +18,16 @@ reuse existing customers by identity, and backfill existing rows at API startup.
   historical-sale responses.
 - Filter `GET /users?historical=1` and add a `historical` count to
   `GET /users/stats`.
-- Add an idempotent backfill command and run it asynchronously at API startup.
+- Add an idempotent, versioned backfill ledger (`backfill_runs`) and a generic
+  runner. The API runs pending tasks at startup; `cmd/backfill` lists and
+  re-runs them manually.
 - Regenerate Swagger.
 
 ## Capabilities
+
+### New Capabilities
+
+- `backfills`: a registry, execution ledger and CLI for one-off data tasks.
 
 ### Modified Capabilities
 
@@ -30,8 +36,9 @@ reuse existing customers by identity, and backfill existing rows at API startup.
 
 ## Impact
 
-- Migration `000044_link_historical_clients_to_users`.
+- Migrations `000044_link_historical_clients_to_users` and `000045_backfill_runs`.
 - `internal/models`, `internal/repository`, `internal/services`,
-  `internal/handlers`, `cmd/api/main.go` (wiring), `cmd/backfill-historical-clients`.
+  `internal/handlers`, `internal/backfills`, `cmd/api/main.go` (wiring) and
+  `cmd/backfill`.
 - `Makefile`, `docs/guides/operations.md`, Swagger.
 - No change to reservations, lots or scores until a real contract is created.

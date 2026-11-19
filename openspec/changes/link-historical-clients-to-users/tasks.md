@@ -2,6 +2,7 @@
 
 - [x] 1.1 Add migration `000044_link_historical_clients_to_users`
 - [x] 1.2 Add `users.historical_client` and `historical_sales.client_user_id`
+- [x] 1.3 Add migration `000045_backfill_runs`
 
 ## 2. Linker
 
@@ -10,11 +11,13 @@
 - [x] 2.3 Sync contact data on historical updates
 - [x] 2.4 Add service tests for create, reuse, placeholder, staff conflict, update relink and backfill
 
-## 3. Backfill and deployment
+## 3. Backfill runner
 
-- [x] 3.1 Add `cmd/backfill-historical-clients` and the Makefile target
-- [x] 3.2 Run the backfill asynchronously from the API startup worker
-- [x] 3.3 Document the runtime behavior
+- [x] 3.1 Add `internal/backfills` registry, runner and `backfill_runs` repository
+- [x] 3.2 Add `cmd/backfill` with `-list`, `-task` and `-force`; keep the historical alias
+- [x] 3.3 Run pending tasks asynchronously from the API startup worker
+- [x] 3.4 Add runner and registry tests
+- [x] 3.5 Document the runtime behavior and generic commands
 
 ## 4. API surface
 

@@ -27,10 +27,15 @@ person cannot be reused for a new sale and does not appear in admin.
 - `ListWithoutClientUser(afterID, limit)` processes in id order.
 - `HistoricalClientService.Backfill` is idempotent and reports linked, skipped
   and error counts.
-- The API enqueues the backfill asynchronously at startup through the background
-  worker, so it does not delay the HTTP server. Per-record conflicts are logged
-  and retried on the next start.
-- `make backfill-historical-clients` remains available for manual runs.
+- A generic `internal/backfills` registry exposes tasks with a unique name and
+  version. The API runs pending tasks asynchronously at startup through the
+  background worker.
+- `backfill_runs` records every execution (`running`, `completed`, `failed`,
+  rows, details, error). A task is skipped when a completed row exists for its
+  name and version; bumping the version re-runs it.
+- `cmd/backfill` supports `-list`, `-task` and `-force` for local/staging or
+  container runs. `make backfill ARGS="..."` is the generic entry point;
+  `backfill-historical-clients` remains an alias.
 
 ### API surface
 

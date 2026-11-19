@@ -36,9 +36,11 @@ Implications:
 
 - Migrations run on every container start.
 - Seeds run on every container start and must remain idempotent.
-- The API links historical sales to customer accounts asynchronously at startup.
-  The backfill only processes sales with `client_user_id IS NULL`, so it is safe
-  and fast after the first run.
+- The API runs pending registered backfills asynchronously at startup. Each task
+  is recorded in `backfill_runs` and skipped after a successful run for its
+  version, so repeated starts are cheap.
+- To add a backfill, register a task in `internal/backfills/tasks.go` with a
+  unique name and a version. Bump the version when the task must run again.
 - The container listens on `8080` by default; override `PORT` if needed.
 - The runtime stage has **no Go toolchain**. The Makefile detects this and
   falls back to `/usr/local/bin`, where the Dockerfile preinstalls
@@ -56,7 +58,18 @@ docker build -t fintera-api .
 docker run -p 8080:8080 --env-file .env fintera-api
 ```
 
-To link existing historical clients without restarting a container:
+## Backfills
+
+The API exposes a generic runner for one-off data tasks:
+
+```bash
+make backfill ARGS="-list"
+make backfill ARGS="-task=historical_clients"
+make backfill ARGS="-task=historical_clients -force"
+```
+
+Without `-task`, it runs every pending task. `-force` re-runs a completed task
+and records a new run. The current historical-client alias is still available:
 
 ```bash
 make backfill-historical-clients
