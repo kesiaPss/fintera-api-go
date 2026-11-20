@@ -441,7 +441,7 @@ func (r ProjectCSVRecord) MergeInto(existing *models.Project) (*models.Project, 
 	return &merged, nil
 }
 
-var projectCSVInvalidDateError = errors.New(
+var errProjectCSVInvalidDate = errors.New(
 	"delivery_date debe tener formato YYYY-MM-DD (también se acepta DD/MM/YYYY o M/D/YYYY)")
 
 // parseProjectCSVDate accepts delivery_date values in the canonical
@@ -460,14 +460,14 @@ func parseProjectCSVDate(value string) (string, error) {
 	}
 	parts := strings.Split(value, separator)
 	if len(parts) != 3 {
-		return "", projectCSVInvalidDateError
+		return "", errProjectCSVInvalidDate
 	}
 
 	numbers := make([]int, 3)
 	for index, part := range parts {
 		number, err := strconv.Atoi(strings.TrimSpace(part))
 		if err != nil || number <= 0 {
-			return "", projectCSVInvalidDateError
+			return "", errProjectCSVInvalidDate
 		}
 		numbers[index] = number
 	}
@@ -480,7 +480,7 @@ func parseProjectCSVDate(value string) (string, error) {
 	// Require a four-digit year so "30/06/27" is rejected instead of being
 	// read as the year 27.
 	if len(strings.TrimSpace(parts[2])) != 4 && !firstIsYear {
-		return "", projectCSVInvalidDateError
+		return "", errProjectCSVInvalidDate
 	}
 
 	var day, month int
@@ -501,7 +501,7 @@ func parseProjectCSVDate(value string) (string, error) {
 
 	normalized := fmt.Sprintf("%04d-%02d-%02d", year, month, day)
 	if _, err := time.Parse("2006-01-02", normalized); err != nil {
-		return "", projectCSVInvalidDateError
+		return "", errProjectCSVInvalidDate
 	}
 	return normalized, nil
 }
