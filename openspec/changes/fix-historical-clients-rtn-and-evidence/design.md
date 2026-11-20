@@ -137,6 +137,9 @@ historical-sale permission model.
 
 ## Open Questions
 
-- None blocking. If the frontend cannot be changed soon, a follow-up can accept
-  multipart directly on `PUT /historical_sales/:id` (design D4 rejected
-  alternative) — the backend endpoints here do not block that option.
+- None blocking. During implementation the `HistoricalSaleService.Update`
+  behavior was refined per frontend feedback: an update payload without a
+  non-empty `evidence_file` preserves the previously uploaded evidence instead
+  of clearing it (regression tests included). Two annotated follow-ups, out of
+  scope: an explicit endpoint to remove evidence, and persisting the original
+  upload filename.
