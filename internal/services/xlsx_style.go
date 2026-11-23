@@ -256,26 +256,12 @@ func newXLSXStyleSet(file *excelize.File) (*xlsxStyleSet, error) {
 	return styles, nil
 }
 
-// writeReportDocumentToSheet renders a full ReportDocument onto an existing
-// sheet: merged title banner, metadata, ordered sections, table headers, zebra
-// rows, totals, note blocks, column widths and a frozen header pane.
-func writeReportDocumentToSheet(file *excelize.File, sheet string, doc *ReportDocument) (*xlsxStyleSet, error) {
-	if file == nil {
-		return nil, fmt.Errorf("xlsx renderer requires a workbook")
-	}
-	if doc == nil {
-		return nil, fmt.Errorf("xlsx renderer requires a report document")
-	}
-
-	styles, err := newXLSXStyleSet(file)
-	if err != nil {
-		return nil, err
-	}
-
-	columns := reportDocumentColumnCount(doc)
+// reportDocumentColumnWidths measures every column from the cells' display
+// text, applying the same floors and caps as the row-by-row writer. It runs
+// as a pre-pass for the streaming renderer, which cannot observe widths while
+// rows are being written.
+func reportDocumentColumnWidths(doc *ReportDocument, columns int) []float64 {
 	widths := make([]float64, columns)
-	row := 1
-	freezeRow := 0
 
 	observe := func(valueText string, cell *ReportCell, column int) {
 		if column < 0 || column >= len(widths) {
@@ -307,195 +293,22 @@ func writeReportDocumentToSheet(file *excelize.File, sheet string, doc *ReportDo
 		}
 	}
 
-	setCell := func(column, atRow int, value any, styleID int) error {
-		name, coordErr := excelize.CoordinatesToCellName(column, atRow)
-		if coordErr != nil {
-			return coordErr
+	for _, section := range doc.Sections {
+		for index, header := range section.Headers {
+			observe(header, nil, index)
 		}
-		if err := file.SetCellValue(sheet, name, value); err != nil {
-			return err
-		}
-		return file.SetCellStyle(sheet, name, name, styleID)
-	}
-
-	mergeRow := func(value string, styleID int, height float64) error {
-		first, coordErr := excelize.CoordinatesToCellName(1, row)
-		if coordErr != nil {
-			return coordErr
-		}
-		last, coordErr := excelize.CoordinatesToCellName(columns, row)
-		if coordErr != nil {
-			return coordErr
-		}
-		if columns > 1 {
-			if err := file.MergeCell(sheet, first, last); err != nil {
-				return err
+		for _, row := range section.Rows {
+			for index, cell := range row.Cells {
+				observe(cell.DisplayText(doc.Currency), &cell, index)
 			}
 		}
-		if err := file.SetCellValue(sheet, first, value); err != nil {
-			return err
-		}
-		if err := file.SetCellStyle(sheet, first, last, styleID); err != nil {
-			return err
-		}
-		if err := file.SetRowHeight(sheet, row, height); err != nil {
-			return err
-		}
-		row++
-		return nil
-	}
-
-	writeTableRow := func(cells []ReportCell, kind ReportRowKind, zebra bool) error {
-		rowStyles := styles.rowStyles(kind, zebra)
-		for column, cell := range cells {
-			display := cell.DisplayText(doc.Currency)
-			if err := setCell(column+1, row, cell.Value(), rowStyles.styleFor(cell, doc.Currency)); err != nil {
-				return err
-			}
-			observe(display, &cell, column)
-		}
-		row++
-		return nil
-	}
-
-	writeHeaders := func(headers []string) error {
-		for column, header := range headers {
-			if err := setCell(column+1, row, header, styles.Header); err != nil {
-				return err
-			}
-			observe(header, nil, column)
-		}
-		if freezeRow == 0 {
-			freezeRow = row
-		}
-		if err := file.SetRowHeight(sheet, row, 22); err != nil {
-			return err
-		}
-		row++
-		return nil
-	}
-
-	writeNote := func(note string) error {
-		if strings.TrimSpace(note) == "" {
-			return nil
-		}
-		lines := utf8.RuneCountInString(note)/95 + 1
-		return mergeRow(note, styles.Note, float64(lines)*14)
-	}
-
-	// Title banner and metadata.
-	if doc.Title != "" {
-		if err := mergeRow(doc.Title, styles.Title, 30); err != nil {
-			return nil, err
-		}
-	}
-	if doc.Subtitle != "" {
-		if err := mergeRow(doc.Subtitle, styles.Subtitle, 20); err != nil {
-			return nil, err
-		}
-	}
-	metaParts := make([]string, 0, 3)
-	if doc.Period != "" {
-		metaParts = append(metaParts, "Periodo: "+doc.Period)
-	}
-	if !doc.GeneratedAt.IsZero() {
-		metaParts = append(metaParts, "Generado el "+doc.GeneratedAt.Format("02/01/2006 15:04"))
-	}
-	if doc.Currency != "" {
-		metaParts = append(metaParts, "Moneda: "+doc.Currency)
-	}
-	if len(metaParts) > 0 {
-		if err := mergeRow(strings.Join(metaParts, " · "), styles.Meta, 18); err != nil {
-			return nil, err
-		}
-	}
-	row++
-
-	// Sections.
-	for sectionIndex, section := range doc.Sections {
-		if sectionIndex > 0 {
-			row++
-		}
-		if section.Title != "" {
-			if err := mergeRow(section.Title, styles.SectionTitle, 22); err != nil {
-				return nil, err
-			}
-		}
-
-		if section.Kind == ReportSectionNote {
-			if err := writeNote(section.Note); err != nil {
-				return nil, err
-			}
-			continue
-		}
-
-		headers := section.Headers
-		if len(headers) == 0 {
-			switch section.Kind {
-			case ReportSectionSummary:
-				headers = []string{"Concepto", "Valor"}
-			case ReportSectionStats:
-				headers = []string{"Métrica", "Valor"}
-			}
-		}
-		if len(headers) > 0 {
-			if err := writeHeaders(headers); err != nil {
-				return nil, err
-			}
-		}
-
-		for index, reportRow := range section.Rows {
-			if err := writeTableRow(reportRow.Cells, reportRow.Kind, index%2 == 1); err != nil {
-				return nil, err
-			}
-		}
-
 		if section.Totals != nil {
-			kind := section.Totals.Kind
-			if kind == "" {
-				kind = ReportRowTotal
-			}
-			if err := writeTableRow(section.Totals.Cells, kind, false); err != nil {
-				return nil, err
+			for index, cell := range section.Totals.Cells {
+				observe(cell.DisplayText(doc.Currency), &cell, index)
 			}
 		}
-
-		if err := writeNote(section.Note); err != nil {
-			return nil, err
-		}
 	}
-
-	// Column widths.
-	for index, width := range widths {
-		if width <= 0 {
-			width = 12
-		}
-		columnName, coordErr := excelize.ColumnNumberToName(index + 1)
-		if coordErr != nil {
-			return nil, coordErr
-		}
-		if err := file.SetColWidth(sheet, columnName, columnName, width); err != nil {
-			return nil, err
-		}
-	}
-
-	// Freeze the banner and the first header row of the sheet.
-	if freezeRow > 0 {
-		topLeft, coordErr := excelize.CoordinatesToCellName(1, freezeRow+1)
-		if coordErr != nil {
-			return nil, coordErr
-		}
-		if err := file.SetPanes(sheet, &excelize.Panes{
-			Freeze:      true,
-			YSplit:      freezeRow,
-			TopLeftCell: topLeft,
-			ActivePane:  "bottomLeft",
-		}); err != nil {
-			return nil, err
-		}
-	}
-
-	return styles, nil
+	return widths
 }
 
 // reportDocumentColumnCount returns the widest row across every section.

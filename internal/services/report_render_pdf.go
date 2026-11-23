@@ -3,24 +3,37 @@ package services
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/jung-kurt/gofpdf"
 )
 
-// renderReportPDF renders a report document as a PDF using the shared
-// reportPDFRenderer design system (title banner, section titles, tables,
-// badges and footer page numbers), matching the contract and balance PDFs.
+// renderReportPDF renders a report document as a PDF into memory. It is a
+// thin wrapper over renderReportPDFTo for tests and callers that need bytes.
 func renderReportPDF(doc *ReportDocument) ([]byte, error) {
+	buffer := &bytes.Buffer{}
+	if err := renderReportPDFTo(buffer, doc); err != nil {
+		return nil, err
+	}
+	return buffer.Bytes(), nil
+}
+
+// renderReportPDFTo renders a report document as a PDF using the shared
+// reportPDFRenderer design system (title banner, section titles, tables,
+// badges and footer page numbers), matching the contract and balance PDFs,
+// and writes the result directly to w. gofpdf still buffers the document
+// internally, but the caller no longer pays for the extra bytes copy.
+func renderReportPDFTo(w io.Writer, doc *ReportDocument) error {
 	if doc == nil {
-		return nil, fmt.Errorf("pdf renderer requires a report document")
+		return fmt.Errorf("pdf renderer requires a report document")
 	}
 
 	pdf := gofpdf.New("P", "mm", "A4", "")
 	tr := pdf.UnicodeTranslatorFromDescriptor("")
 	if err := pdf.Error(); err != nil {
-		return nil, fmt.Errorf("failed to initialise report pdf: %w", err)
+		return fmt.Errorf("failed to initialise report pdf: %w", err)
 	}
 
 	pdf.SetMargins(reportMarginX, reportMarginTop, reportMarginX)
@@ -45,14 +58,13 @@ func renderReportPDF(doc *ReportDocument) ([]byte, error) {
 	renderer.reportDocument(doc)
 
 	if err := pdf.Error(); err != nil {
-		return nil, fmt.Errorf("failed to render report pdf: %w", err)
+		return fmt.Errorf("failed to render report pdf: %w", err)
 	}
 
-	var buffer bytes.Buffer
-	if err := pdf.Output(&buffer); err != nil {
-		return nil, fmt.Errorf("failed to write report pdf: %w", err)
+	if err := pdf.Output(w); err != nil {
+		return fmt.Errorf("failed to write report pdf: %w", err)
 	}
-	return buffer.Bytes(), nil
+	return nil
 }
 
 // reportDocument draws the whole neutral document with the shared primitives.

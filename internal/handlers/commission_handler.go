@@ -57,7 +57,7 @@ func (h *CommissionHandler) ShowRules(c *gin.Context) {
 func (h *CommissionHandler) UpdateRules(c *gin.Context) {
 	var input services.CommissionRulesInput
 	if err := BindNestedOrFlat(c, "rules", &input); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Datos inválidos: " + err.Error()})
+		WriteBindError(c, err, "Datos inválidos: ")
 		return
 	}
 	rules, err := h.commissions.UpdateRules(c.Request.Context(), middleware.GetUserID(c), input)
@@ -102,7 +102,7 @@ func (h *CommissionHandler) UpsertException(c *gin.Context) {
 		Rate     float64 `json:"rate"`
 	}
 	if err := BindNestedOrFlat(c, "exception", &input); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Datos inválidos: " + err.Error()})
+		WriteBindError(c, err, "Datos inválidos: ")
 		return
 	}
 	exception, err := h.commissions.UpsertException(c.Request.Context(), middleware.GetUserID(c), input.SellerID, input.Rate)

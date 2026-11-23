@@ -124,7 +124,7 @@ func (h *HistoricalSaleHandler) Show(c *gin.Context) {
 func (h *HistoricalSaleHandler) Create(c *gin.Context) {
 	var input services.HistoricalSaleInput
 	if err := BindNestedOrFlat(c, "historical_sale", &input); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Datos inválidos: " + err.Error()})
+		WriteBindError(c, err, "Datos inválidos: ")
 		return
 	}
 	actorID := middleware.GetUserID(c)
@@ -157,7 +157,7 @@ func (h *HistoricalSaleHandler) Update(c *gin.Context) {
 	}
 	var input services.HistoricalSaleInput
 	if err := BindNestedOrFlat(c, "historical_sale", &input); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Datos inválidos: " + err.Error()})
+		WriteBindError(c, err, "Datos inválidos: ")
 		return
 	}
 	sale, err := h.historical.Update(c.Request.Context(), uint(id), middleware.GetUserID(c), input, middleware.IsAdmin(c), c.ClientIP(), c.Request.UserAgent())

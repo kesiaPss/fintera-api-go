@@ -84,7 +84,7 @@ func isSettingsValidationError(err error) bool {
 func (h *GeneralSettingsHandler) Update(c *gin.Context) {
 	var req generalSettingsUpdateRequest
 	if err := BindNestedOrFlat(c, "settings", &req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Formato JSON inválido: " + err.Error()})
+		WriteBindError(c, err, "Formato JSON inválido: ")
 		return
 	}
 	termsDate, err := services.ParseTermsEffectiveDate(req.TermsEffectiveDate)

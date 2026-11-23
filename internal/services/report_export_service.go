@@ -1,7 +1,9 @@
 package services
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -67,22 +69,39 @@ func NormalizeReportFormat(raw string) (string, error) {
 	}
 }
 
-// RenderReport renders a report document in the requested format. XLSX uses
-// the Spanish sheet name provided by the caller; CSV and PDF ignore it because
-// they do not have sheets.
+// RenderReport renders a report document in the requested format into memory.
+// It is a thin wrapper over RenderReportTo for callers (and tests) that need
+// the bytes; HTTP handlers should stream with RenderReportTo directly.
 func (s *ReportExportService) RenderReport(doc *ReportDocument, format, sheetName string) ([]byte, error) {
+	buffer := &bytes.Buffer{}
+	if err := s.RenderReportTo(buffer, doc, format, sheetName); err != nil {
+		return nil, err
+	}
+	return buffer.Bytes(), nil
+}
+
+// RenderReportTo renders a report document in the requested format directly
+// into w, avoiding a full in-memory copy of the file. XLSX uses the Spanish
+// sheet name provided by the caller; CSV and PDF ignore it because they do
+// not have sheets.
+func (s *ReportExportService) RenderReportTo(w io.Writer, doc *ReportDocument, format, sheetName string) error {
 	normalized, err := NormalizeReportFormat(format)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	switch normalized {
 	case ReportFormatXLSX:
-		return renderReportXLSX(doc, sheetName)
+		data, err := renderReportXLSX(doc, sheetName)
+		if err != nil {
+			return err
+		}
+		_, err = w.Write(data)
+		return err
 	case ReportFormatCSV:
-		return renderReportCSV(doc)
+		return renderReportCSVTo(w, doc)
 	default:
-		return renderReportPDF(doc)
+		return renderReportPDFTo(w, doc)
 	}
 }
 

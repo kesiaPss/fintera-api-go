@@ -100,6 +100,16 @@ Uploads are served publicly from `/uploads`. Use a persistent volume; otherwise
 files are lost on redeploy. The 10 MB upload limit and allowed MIME types are
 enforced in `internal/storage/local.go` and the payment handler.
 
+Multipart request bodies are buffered with a small in-memory cap
+(`router.MaxMultipartMemory`, 8 MiB; 16 MiB for project drawings) and the rest
+spills to temporary files; each bulk upload endpoint also bounds the total
+request body with `http.MaxBytesReader`. JSON request bodies are capped
+globally by `middleware.BodyLimit` at `MAX_JSON_BODY_BYTES` (default 2 MiB);
+oversized bodies are rejected (413 at direct-read binding sites, 400 for Gin
+binding). Profile pictures are dimension-checked before decoding (max 4096 px
+per side, 16M pixels total) so a compressed pixel bomb cannot expand into
+hundreds of MB of bitmap memory.
+
 ## Background jobs
 
 Recurring jobs run inside each API process. Consequences:

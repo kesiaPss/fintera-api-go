@@ -90,7 +90,7 @@ func (h *MediaHandler) ListLotPhotos(c *gin.Context) {
 func (h *MediaHandler) UploadDrawings(c *gin.Context) {
 	projectID, _ := strconv.ParseUint(c.Param("project_id"), 10, 32)
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 500<<20)
-	if err := c.Request.ParseMultipartForm(64 << 20); err != nil {
+	if err := c.Request.ParseMultipartForm(16 << 20); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "No se pudieron leer los archivos"})
 		return
 	}
@@ -99,6 +99,7 @@ func (h *MediaHandler) UploadDrawings(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "No se pudieron leer los archivos"})
 		return
 	}
+	defer func() { _ = form.RemoveAll() }()
 
 	keys := sortedFileKeys(form.File, "files")
 	if len(keys) == 0 {
@@ -199,7 +200,7 @@ func (h *MediaHandler) DeleteDrawing(c *gin.Context) {
 func (h *MediaHandler) UploadProjectPhotos(c *gin.Context) {
 	projectID, _ := strconv.ParseUint(c.Param("project_id"), 10, 32)
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 200<<20)
-	if err := c.Request.ParseMultipartForm(32 << 20); err != nil {
+	if err := c.Request.ParseMultipartForm(8 << 20); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "No se pudieron leer las fotos"})
 		return
 	}
@@ -208,6 +209,7 @@ func (h *MediaHandler) UploadProjectPhotos(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "No se pudieron leer las fotos"})
 		return
 	}
+	defer func() { _ = form.RemoveAll() }()
 
 	keys := sortedFileKeys(form.File, "photos")
 	if len(keys) == 0 {
@@ -266,7 +268,7 @@ func (h *MediaHandler) UploadProjectPhotos(c *gin.Context) {
 func (h *MediaHandler) UploadLotPhotos(c *gin.Context) {
 	lotID, _ := strconv.ParseUint(c.Param("lot_id"), 10, 32)
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 200<<20)
-	if err := c.Request.ParseMultipartForm(32 << 20); err != nil {
+	if err := c.Request.ParseMultipartForm(8 << 20); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "No se pudieron leer las fotos"})
 		return
 	}
@@ -275,6 +277,7 @@ func (h *MediaHandler) UploadLotPhotos(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "No se pudieron leer las fotos"})
 		return
 	}
+	defer func() { _ = form.RemoveAll() }()
 
 	keys := sortedFileKeys(form.File, "photos")
 	if len(keys) == 0 {

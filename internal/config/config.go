@@ -23,6 +23,12 @@ type Config struct {
 	// Storage
 	StoragePath string
 
+	// Request limits
+	// MaxJSONBodyBytes caps the JSON request bodies accepted by the API.
+	// Multipart uploads are exempt; they enforce their own per-endpoint size
+	// limits in the handlers.
+	MaxJSONBodyBytes int64
+
 	// Background Workers
 	WorkerCount int
 
@@ -61,6 +67,7 @@ func Load() (*Config, error) {
 		JWTSecret:                getEnv("JWT_SECRET", ""),
 		JWTExpirationHours:       getEnvAsInt("JWT_EXPIRATION_HOURS", 24),
 		StoragePath:              getEnv("STORAGE_PATH", "./storage"),
+		MaxJSONBodyBytes:         getEnvAsInt64("MAX_JSON_BODY_BYTES", 2097152), // 2 MiB
 		WorkerCount:              getEnvAsInt("WORKER_COUNT", 5),
 		AllowedOrigins:           getEnvAsSlice("ALLOWED_ORIGINS", []string{"*"}),
 		AppURL:                   getEnv("APP_URL", "https://fintera.securexapp.com"),
@@ -109,6 +116,19 @@ func getEnvAsInt(key string, defaultValue int) int {
 		return defaultValue
 	}
 	value, err := strconv.Atoi(valueStr)
+	if err != nil {
+		return defaultValue
+	}
+	return value
+}
+
+// getEnvAsInt64 reads an environment variable as a 64-bit integer
+func getEnvAsInt64(key string, defaultValue int64) int64 {
+	valueStr := getEnv(key, "")
+	if valueStr == "" {
+		return defaultValue
+	}
+	value, err := strconv.ParseInt(valueStr, 10, 64)
 	if err != nil {
 		return defaultValue
 	}

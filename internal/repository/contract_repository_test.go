@@ -110,11 +110,12 @@ func TestContractRepository_LoadNextPayments(t *testing.T) {
 	contracts := []models.Contract{{ID: 7}, {ID: 8}, {ID: 9}}
 	due := time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)
 
-	mock.ExpectQuery(`SELECT \* FROM "payments" WHERE contract_id IN \(\$1,\$2,\$3\) AND status IN \(\$4,\$5\) AND \(\(document_path IS NULL OR document_path = ''\)\) ORDER BY due_date ASC, id ASC`).
+	// DISTINCT ON makes the database return at most one payment per contract:
+	// the earliest due_date, then lowest id.
+	mock.ExpectQuery(`SELECT DISTINCT ON \(contract_id\) payments\.\* FROM "payments" WHERE contract_id IN \(\$1,\$2,\$3\) AND status IN \(\$4,\$5\) AND \(\(document_path IS NULL OR document_path = ''\)\) ORDER BY contract_id ASC, due_date ASC, id ASC`).
 		WithArgs(uint(7), uint(8), uint(9), models.PaymentStatusPending, models.PaymentStatusSubmitted).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "contract_id", "amount", "due_date", "status", "payment_type", "description"}).
 			AddRow(101, 7, 50000, due, models.PaymentStatusPending, models.PaymentTypeReservation, "Pago de Reserva").
-			AddRow(102, 7, 54166, due.AddDate(0, 1, 0), models.PaymentStatusPending, models.PaymentTypeInstallment, "Cuota 1 de 12").
 			AddRow(103, 8, 90000, due, models.PaymentStatusPending, models.PaymentTypeDownPayment, "Pago Inicial"))
 
 	err := repo.loadNextPayments(context.Background(), contracts)
@@ -132,7 +133,7 @@ func TestContractRepository_LoadNextPayments_QueryError(t *testing.T) {
 	db, mock := setupMockDB(t)
 	repo := NewContractRepository(db).(*contractRepository)
 
-	mock.ExpectQuery(`SELECT \* FROM "payments"`).
+	mock.ExpectQuery(`SELECT DISTINCT ON \(contract_id\) payments\.\* FROM "payments"`).
 		WillReturnError(assert.AnError)
 
 	err := repo.loadNextPayments(context.Background(), []models.Contract{{ID: 7}})
@@ -154,6 +155,177 @@ func TestPaymentRepository_FindOverdue(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, payments)
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPaymentRepository_FindOverdueInBatchesKeysetsUntilShortBatch(t *testing.T) {
+	db, mock := setupMockDB(t)
+	repo := NewPaymentRepository(db)
+
+	overdueRows := func(ids ...uint) *sqlmock.Rows {
+		rows := sqlmock.NewRows([]string{"id", "contract_id", "status", "due_date", "amount", "payment_type"})
+		for _, id := range ids {
+			rows.AddRow(id, uint(7), models.PaymentStatusPending,
+				time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), 1000.0, models.PaymentTypeInstallment)
+		}
+		return rows
+	}
+	// Contracts are returned without lot/user foreign keys so the nested
+	// preloads are skipped and the mock stays focused on the batch loop.
+	contractRows := func() *sqlmock.Rows {
+		return sqlmock.NewRows([]string{"id", "lot_id", "applicant_user_id"}).AddRow(7, 0, 0)
+	}
+
+	mock.ExpectQuery(`payments\.id > \$2`).
+		WithArgs(models.PaymentStatusPending, uint(0), sqlmock.AnyArg()).
+		WillReturnRows(overdueRows(1, 2))
+	mock.ExpectQuery(`FROM "contracts"`).
+		WithArgs(uint(7)).
+		WillReturnRows(contractRows())
+
+	// The second batch is short (1 < 2), so the loop must stop without a
+	// third query.
+	mock.ExpectQuery(`payments\.id > \$2`).
+		WithArgs(models.PaymentStatusPending, uint(2), sqlmock.AnyArg()).
+		WillReturnRows(overdueRows(3))
+	mock.ExpectQuery(`FROM "contracts"`).
+		WithArgs(uint(7)).
+		WillReturnRows(contractRows())
+
+	var seen [][]uint
+	err := repo.FindOverdueInBatches(context.Background(), 2, func(batch []models.Payment) error {
+		ids := make([]uint, 0, len(batch))
+		for i := range batch {
+			ids = append(ids, batch[i].ID)
+		}
+		seen = append(seen, ids)
+		return nil
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, [][]uint{{1, 2}, {3}}, seen)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPaymentRepository_FindOverdueInBatchesStopsOnCallbackError(t *testing.T) {
+	db, mock := setupMockDB(t)
+	repo := NewPaymentRepository(db)
+
+	mock.ExpectQuery(`payments\.id > \$2`).
+		WithArgs(models.PaymentStatusPending, uint(0), sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "contract_id", "status", "due_date", "amount", "payment_type"}).
+			AddRow(uint(1), uint(7), models.PaymentStatusPending, time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), 1000.0, models.PaymentTypeInstallment).
+			AddRow(uint(2), uint(7), models.PaymentStatusPending, time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), 1000.0, models.PaymentTypeInstallment))
+	mock.ExpectQuery(`FROM "contracts"`).
+		WithArgs(uint(7)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "lot_id", "applicant_user_id"}).AddRow(7, 0, 0))
+
+	calls := 0
+	err := repo.FindOverdueInBatches(context.Background(), 2, func([]models.Payment) error {
+		calls++
+		return assert.AnError
+	})
+
+	require.ErrorIs(t, err, assert.AnError)
+	assert.Equal(t, 1, calls, "no further callback after the first error")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPaymentRepository_FindOverdueInBatchesEmptyResult(t *testing.T) {
+	db, mock := setupMockDB(t)
+	repo := NewPaymentRepository(db)
+
+	mock.ExpectQuery(`payments\.id > \$2`).
+		WithArgs(models.PaymentStatusPending, uint(0), sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "contract_id", "status", "due_date", "amount", "payment_type"}))
+
+	calls := 0
+	err := repo.FindOverdueInBatches(context.Background(), 2, func([]models.Payment) error {
+		calls++
+		return nil
+	})
+
+	require.NoError(t, err)
+	assert.Zero(t, calls)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPaymentRepository_ListProjectAndSellerScopeJoinSQL(t *testing.T) {
+	db, mock := setupMockDB(t)
+	repo := NewPaymentRepository(db)
+
+	query := NewListQuery()
+	query.Filters["status"] = models.PaymentStatusPaid
+	query.Filters["project_id"] = "7"
+	query.Filters["seller_id"] = "12"
+
+	// Count clone must see the same joins and predicates.
+	mock.ExpectQuery(`SELECT count\(\*\).*JOIN contracts AS rep_c ON rep_c\.id = payments\.contract_id JOIN lots AS rep_l ON rep_l\.id = rep_c\.lot_id`).
+		WithArgs(models.PaymentStatusPaid, "12", "12", "7").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+
+	// Empty page: preloads are skipped, so exactly two queries run.
+	mock.ExpectQuery(`SELECT payments\.\* FROM "payments" JOIN contracts AS rep_c ON rep_c\.id = payments\.contract_id JOIN lots AS rep_l ON rep_l\.id = rep_c\.lot_id.*\(rep_c\.seller_id = \$2 OR rep_c\.creator_id = \$3\).*AND rep_l\.project_id = \$4`).
+		WithArgs(models.PaymentStatusPaid, "12", "12", "7", sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}))
+
+	payments, total, err := repo.List(context.Background(), query)
+
+	require.NoError(t, err)
+	assert.Empty(t, payments)
+	assert.Equal(t, int64(0), total)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestContractRepository_StreamForCommissionsKeysetsWithCursor(t *testing.T) {
+	db, mock := setupMockDB(t)
+	mock.MatchExpectationsInOrder(false)
+	repo := NewContractRepository(db)
+
+	created := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	contractRows := func(ids ...uint) *sqlmock.Rows {
+		rows := sqlmock.NewRows([]string{"id", "status", "created_at", "applicant_user_id", "lot_id", "seller_id", "creator_id"})
+		for _, id := range ids {
+			rows.AddRow(id, models.ContractStatusApproved, created.AddDate(0, 0, -int(id)), uint(0), uint(0), nil, nil)
+		}
+		return rows
+	}
+	// BelongsTo preloads fire even for zero foreign keys (users, lots); the
+	// NULL seller/creator pointers skip theirs, and empty lot rows skip the
+	// nested project preload.
+	emptyUsers := func() *sqlmock.Rows { return sqlmock.NewRows([]string{"id"}) }
+	emptyLots := func() *sqlmock.Rows { return sqlmock.NewRows([]string{"id", "project_id"}) }
+
+	query := &ContractQuery{
+		ListQuery: NewListQuery(),
+		IsAdmin:   true,
+	}
+	query.Filters["status_in"] = models.ContractStatusApproved + "," + models.ContractStatusClosed
+
+	// First batch: no cursor predicate, composite DESC ordering to preserve
+	// List's created_at DESC report order.
+	mock.ExpectQuery(`SELECT \* FROM "contracts" WHERE contracts\.status IN \(\$1,\$2\) ORDER BY contracts\.created_at DESC, contracts\.id DESC LIMIT \$3`).
+		WithArgs(models.ContractStatusApproved, models.ContractStatusClosed, sqlmock.AnyArg()).
+		WillReturnRows(contractRows(11, 12))
+	mock.ExpectQuery(`FROM "users"`).WithArgs(uint(0)).WillReturnRows(emptyUsers())
+	mock.ExpectQuery(`FROM "users"`).WithArgs(uint(0)).WillReturnRows(emptyUsers())
+	mock.ExpectQuery(`FROM "lots"`).WithArgs(uint(0)).WillReturnRows(emptyLots())
+	mock.ExpectQuery(`FROM "lots"`).WithArgs(uint(0)).WillReturnRows(emptyLots())
+
+	// Second batch: row-value keyset cursor; its short result stops the loop.
+	mock.ExpectQuery(`WHERE contracts\.status IN \(\$1,\$2\) AND \(contracts\.created_at, contracts\.id\) < \(\$3,\s*\$4\) ORDER BY contracts\.created_at DESC, contracts\.id DESC LIMIT \$5`).
+		WithArgs(models.ContractStatusApproved, models.ContractStatusClosed, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnRows(contractRows(13))
+
+	var seen []uint
+	err := repo.StreamForCommissions(context.Background(), query, 2, func(batch []models.Contract) error {
+		for i := range batch {
+			seen = append(seen, batch[i].ID)
+		}
+		return nil
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, []uint{11, 12, 13}, seen)
 }
 
 func TestPaymentRepository_FindOverdueRemindersUsesSingleJoinedQuery(t *testing.T) {

@@ -66,6 +66,7 @@ Source: `internal/config/config.go`.
 | `JWT_SECRET` | dev fallback | Required in production |
 | `JWT_EXPIRATION_HOURS` | `24` | JWT lifetime |
 | `STORAGE_PATH` | `./storage` | Local upload root |
+| `MAX_JSON_BODY_BYTES` | `2097152` | Max JSON request body in bytes (multipart uploads exempt) |
 | `WORKER_COUNT` | `5` | Background worker consumers |
 | `ALLOWED_ORIGINS` | `*` | Comma-separated CORS origins |
 | `APP_URL` | `https://fintera.securexapp.com` | Used in internal/admin email links |

@@ -48,7 +48,7 @@ func (h *BrandingHandler) Show(c *gin.Context) {
 func (h *BrandingHandler) Update(c *gin.Context) {
 	var payload brandingUpdateRequest
 	if err := BindNestedOrFlat(c, "branding", &payload); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Formato JSON inválido: " + err.Error()})
+		WriteBindError(c, err, "Formato JSON inválido: ")
 		return
 	}
 
@@ -80,9 +80,14 @@ type brandingUpdateRequest struct {
 func (h *BrandingHandler) UploadLogo(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, services.MaxBrandingLogoBytes)
 
-	file, header, err := c.Request.FormFile("logo")
+	header, err := c.FormFile("logo")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "No se ha subido ningún logo o el archivo es demasiado grande"})
+		return
+	}
+	file, err := header.Open()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No se pudo leer el logo"})
 		return
 	}
 	defer func() { _ = file.Close() }()

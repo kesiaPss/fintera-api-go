@@ -8,11 +8,13 @@ import (
 	"time"
 
 	"github.com/sjperalta/fintera-api/internal/models"
+	"github.com/sjperalta/fintera-api/internal/repository"
 )
 
 // This file builds the overdue payments export document. The repository
-// already excludes cancelled contracts and does not skip reminded rows; the
-// builder only filters by scope, buckets by days past due and labels.
+// already excludes cancelled contracts, does not skip reminded rows and
+// applies the seller/project scope in SQL; the builder buckets the streamed
+// rows by days past due and labels them.
 
 // overdueBucketOrder is the fixed summary order of the aging buckets.
 var overdueBucketOrder = []string{
@@ -40,41 +42,62 @@ type overdueDetailLine struct {
 
 // BuildOverdueReport builds the overdue payments report document: an aging
 // bucket summary and the client detail of every overdue payment of an active
-// contract, optionally scoped to a seller or a project.
+// contract, optionally scoped to a seller or a project. The dataset arrives in
+// keyset batches with the scope applied in SQL; only bucket counters and
+// rendered rows are kept, so peak memory is one batch of payments. Rows are
+// re-sorted by due date at the end, matching the previous full-load path.
 func (s *ReportExportService) BuildOverdueReport(ctx context.Context, filters ReportExportFilters) (*ReportDocument, error) {
 	now := time.Now()
-
-	payments, err := s.overdueRepo.FindOverdueForActiveContractsDetailed(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load overdue payments for the report: %w", err)
-	}
-
-	filtered := overdueFilterPayments(payments, filters)
-	sort.SliceStable(filtered, func(i, j int) bool {
-		if filtered[i].DueDate.Equal(filtered[j].DueDate) {
-			return filtered[i].ID < filtered[j].ID
-		}
-		return filtered[i].DueDate.Before(filtered[j].DueDate)
-	})
 
 	summaries := make(map[string]*overdueBucketSummary, len(overdueBucketOrder))
 	for _, bucket := range overdueBucketOrder {
 		summaries[bucket] = &overdueBucketSummary{Bucket: bucket}
 	}
 
-	details := make([]overdueDetailLine, 0, len(filtered))
-	for _, payment := range filtered {
-		days := payment.OverdueDays()
-		if days < 1 {
-			days = 1
+	type detailEntry struct {
+		dueDate time.Time
+		id      uint
+		row     ReportRow
+	}
+	var entries []detailEntry
+
+	err := s.overdueRepo.StreamOverdueForActiveContractsDetailed(ctx, filters.ProjectID,
+		filters.SellerID, filters.FilterBySeller, repository.PaymentScanBatchSize,
+		func(payments []models.Payment) error {
+			for i := range payments {
+				payment := &payments[i]
+				days := payment.OverdueDays()
+				if days < 1 {
+					days = 1
+				}
+				bucket := overdueBucketForDays(days)
+				if summary, ok := summaries[bucket]; ok {
+					summary.Payments++
+					summary.Capital += payment.Amount
+					summary.Interest += floatValue(payment.InterestAmount)
+				}
+				entries = append(entries, detailEntry{
+					dueDate: payment.DueDate,
+					id:      payment.ID,
+					row:     overdueDetailRow(overdueDetailLine{Payment: *payment, Days: days, Bucket: bucket}),
+				})
+			}
+			return nil
+		})
+	if err != nil {
+		return nil, fmt.Errorf("failed to load overdue payments for the report: %w", err)
+	}
+
+	sort.SliceStable(entries, func(i, j int) bool {
+		if entries[i].dueDate.Equal(entries[j].dueDate) {
+			return entries[i].id < entries[j].id
 		}
-		bucket := overdueBucketForDays(days)
-		if summary, ok := summaries[bucket]; ok {
-			summary.Payments++
-			summary.Capital += payment.Amount
-			summary.Interest += floatValue(payment.InterestAmount)
-		}
-		details = append(details, overdueDetailLine{Payment: payment, Days: days, Bucket: bucket})
+		return entries[i].dueDate.Before(entries[j].dueDate)
+	})
+
+	rows := make([]ReportRow, 0, len(entries))
+	for i := range entries {
+		rows = append(rows, entries[i].row)
 	}
 
 	period, periodKey := reportPeriodLabel(filters.StartDate, filters.EndDate, now)
@@ -91,7 +114,7 @@ func (s *ReportExportService) BuildOverdueReport(ctx context.Context, filters Re
 
 	document.Sections = append(document.Sections,
 		overdueSummarySection(summaries),
-		overdueDetailSection(details),
+		overdueDetailSection(rows),
 		ReportSection{
 			Title: "Notas",
 			Kind:  ReportSectionNote,
@@ -100,31 +123,6 @@ func (s *ReportExportService) BuildOverdueReport(ctx context.Context, filters Re
 	)
 
 	return document, nil
-}
-
-// overdueFilterPayments applies the seller and project scope in Go so a single
-// repository query feeds every export variant.
-func overdueFilterPayments(payments []models.Payment, filters ReportExportFilters) []models.Payment {
-	filtered := make([]models.Payment, 0, len(payments))
-	for _, payment := range payments {
-		if filters.FilterBySeller && !overdueContractBelongsToSeller(payment.Contract, filters.SellerID) {
-			continue
-		}
-		if filters.ProjectID != nil && payment.Contract.Lot.ProjectID != *filters.ProjectID {
-			continue
-		}
-		filtered = append(filtered, payment)
-	}
-	return filtered
-}
-
-// overdueContractBelongsToSeller accepts a contract whose current seller or
-// original creator is the scoped seller, matching the contract report scope.
-func overdueContractBelongsToSeller(contract models.Contract, sellerID uint) bool {
-	if contract.SellerID != nil && *contract.SellerID == sellerID {
-		return true
-	}
-	return contract.CreatorID != nil && *contract.CreatorID == sellerID
 }
 
 // overdueBucketForDays maps days past due to an aging bucket. Boundaries are
@@ -191,12 +189,7 @@ func overdueSummarySection(summaries map[string]*overdueBucketSummary) ReportSec
 
 // overdueDetailSection renders one line per overdue payment ordered by due
 // date, with the fiscal data of the applicant and the contract bank reference.
-func overdueDetailSection(details []overdueDetailLine) ReportSection {
-	rows := make([]ReportRow, 0, len(details))
-	for _, detail := range details {
-		rows = append(rows, overdueDetailRow(detail))
-	}
-
+func overdueDetailSection(rows []ReportRow) ReportSection {
 	return ReportSection{
 		Title: "Detalle de Pagos Vencidos",
 		Kind:  ReportSectionTable,

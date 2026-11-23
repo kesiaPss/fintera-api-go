@@ -79,6 +79,15 @@ func (s *contractRepoStub) List(_ context.Context, _ *repository.ContractQuery) 
 	return s.list, s.total, s.err
 }
 
+// StreamForCommissions belongs to the commissions report, which the contract
+// handler tests never exercise; it exists to satisfy the interface.
+func (s *contractRepoStub) StreamForCommissions(_ context.Context, _ *repository.ContractQuery, _ int, fn func([]models.Contract) error) error {
+	if len(s.list) > 0 {
+		return fn(s.list)
+	}
+	return nil
+}
+
 func (s *contractRepoStub) FindActiveByLot(context.Context, uint) (*models.Contract, error) {
 	return s.byID, s.err
 }
@@ -165,6 +174,14 @@ func (s *paymentRepoStub) List(context.Context, *repository.ListQuery) ([]models
 
 func (s *paymentRepoStub) FindOverdue(context.Context) ([]models.Payment, error) {
 	return nil, s.err
+}
+
+func (s *paymentRepoStub) FindOverdueInBatches(context.Context, int, func([]models.Payment) error) error {
+	return s.err
+}
+
+func (s *paymentRepoStub) StreamPaidForReport(context.Context, *time.Time, *time.Time, *uint, uint, bool, int, func([]models.Payment) error) error {
+	return s.err
 }
 
 func (s *paymentRepoStub) FindOverdueReminders(context.Context) ([]models.Payment, error) {

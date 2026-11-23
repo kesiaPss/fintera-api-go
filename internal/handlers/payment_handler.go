@@ -290,9 +290,14 @@ func (h *PaymentHandler) UploadReceipt(c *gin.Context) {
 		return
 	}
 
-	file, header, err := c.Request.FormFile("receipt")
+	header, err := c.FormFile("receipt")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Archivo requerido"})
+		return
+	}
+	file, err := header.Open()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No se pudo leer el archivo"})
 		return
 	}
 	defer func() { _ = file.Close() }()
@@ -344,9 +349,14 @@ func (h *PaymentHandler) UploadPublicReservationReceipt(c *gin.Context) {
 		return
 	}
 
-	file, header, err := c.Request.FormFile("receipt")
+	header, err := c.FormFile("receipt")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Archivo requerido"})
+		return
+	}
+	file, err := header.Open()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No se pudo leer el archivo"})
 		return
 	}
 	defer func() { _ = file.Close() }()

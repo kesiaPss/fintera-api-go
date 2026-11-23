@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/sjperalta/fintera-api/internal/middleware"
 	"github.com/sjperalta/fintera-api/internal/services"
+	"github.com/sjperalta/fintera-api/pkg/logger"
 )
 
 // ReportExportHandler serves the financial report exports. It parses the
@@ -303,17 +304,16 @@ func parseReportExportFilters(c *gin.Context, defaultToCurrentMonth, applyProjec
 	return filters, nil
 }
 
-// serveReportExport renders the document and streams it as an attachment.
+// serveReportExport streams the rendered document as an attachment. The
+// document has already been built by the caller, so any error that can be
+// reported as JSON happens before this function writes file bytes; from the
+// first rendered byte onward the response is the file and a render failure
+// can only be logged (the client sees a truncated download, never a JSON
+// body masquerading as one).
 func (h *ReportExportHandler) serveReportExport(c *gin.Context, document *services.ReportDocument, format, sheetName string) {
 	normalized, err := services.NormalizeReportFormat(format)
 	if err != nil {
 		writeReportExportBadRequest(c, err)
-		return
-	}
-
-	data, err := h.exportSvc.RenderReport(document, normalized, sheetName)
-	if err != nil {
-		writeReportExportServerError(c, err)
 		return
 	}
 
@@ -323,7 +323,12 @@ func (h *ReportExportHandler) serveReportExport(c *gin.Context, document *servic
 	}
 
 	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%s", document.Filename(normalized)))
-	c.Data(http.StatusOK, contentType, data)
+	c.Header("Content-Type", contentType)
+	c.Status(http.StatusOK)
+	if err := h.exportSvc.RenderReportTo(c.Writer, document, normalized, sheetName); err != nil {
+		logger.Error("report export failed mid-stream",
+			"report", document.BaseName, "format", normalized, "error", err)
+	}
 }
 
 // writeReportExportBadRequest returns a Spanish validation error.

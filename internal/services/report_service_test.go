@@ -51,6 +51,31 @@ func (m *mockContractRepository) List(ctx context.Context, query *repository.Con
 	}
 	return nil, 0, nil
 }
+
+// StreamForCommissions delegates to mockList and chunks the result, so
+// existing GenerateCommissions fixtures keep working unchanged.
+func (m *mockContractRepository) StreamForCommissions(ctx context.Context, query *repository.ContractQuery, batchSize int, fn func(batch []models.Contract) error) error {
+	if m.mockList == nil {
+		return nil
+	}
+	contracts, _, err := m.mockList(ctx, query)
+	if err != nil {
+		return err
+	}
+	if batchSize <= 0 {
+		batchSize = repository.PaymentScanBatchSize
+	}
+	for start := 0; start < len(contracts); start += batchSize {
+		end := start + batchSize
+		if end > len(contracts) {
+			end = len(contracts)
+		}
+		if err := fn(contracts[start:end]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 func (m *mockContractRepository) FindActiveByLot(ctx context.Context, lotID uint) (*models.Contract, error) {
 	return nil, nil
 }
