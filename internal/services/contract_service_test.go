@@ -78,6 +78,13 @@ func (m *mockContractRepo) List(ctx context.Context, query *repository.ContractQ
 	return args.Get(0).([]models.Contract), args.Get(1).(int64), args.Error(2)
 }
 
+// StreamForCommissions is only used by the commissions report, which these
+// contract/payment service tests do not exercise. Provided so the fakes still
+// satisfy the interface; returns no rows.
+func (m *mockContractRepo) StreamForCommissions(context.Context, *repository.ContractQuery, int, func([]models.Contract) error) error {
+	return nil
+}
+
 func (m *mockContractRepo) FindActiveByLot(ctx context.Context, lotID uint) (*models.Contract, error) {
 	args := m.Called(ctx, lotID)
 	if args.Get(0) == nil {
@@ -271,6 +278,32 @@ func (m *mockPaymentRepo) List(ctx context.Context, query *repository.ListQuery)
 func (m *mockPaymentRepo) FindOverdue(ctx context.Context) ([]models.Payment, error) {
 	args := m.Called(ctx)
 	return args.Get(0).([]models.Payment), args.Error(1)
+}
+
+func (m *mockPaymentRepo) StreamPaidForReport(context.Context, *time.Time, *time.Time, *uint, uint, bool, int, func([]models.Payment) error) error {
+	return nil
+}
+
+// FindOverdueInBatches delegates to FindOverdue and chunks the result so the
+// testify mock keeps a single expectation for the overdue dataset.
+func (m *mockPaymentRepo) FindOverdueInBatches(ctx context.Context, batchSize int, fn func(batch []models.Payment) error) error {
+	payments, err := m.FindOverdue(ctx)
+	if err != nil {
+		return err
+	}
+	if batchSize <= 0 {
+		batchSize = 1
+	}
+	for start := 0; start < len(payments); start += batchSize {
+		end := start + batchSize
+		if end > len(payments) {
+			end = len(payments)
+		}
+		if err := fn(payments[start:end]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (m *mockPaymentRepo) FindOverdueReminders(ctx context.Context) ([]models.Payment, error) {

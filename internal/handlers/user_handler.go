@@ -1049,9 +1049,14 @@ func (h *UserHandler) UploadProfilePicture(c *gin.Context) {
 	// Limit upload size (e.g., 5MB)
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 5<<20)
 
-	file, header, err := c.Request.FormFile("image")
+	header, err := c.FormFile("image")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "No se ha subido ninguna imagen o el archivo es demasiado grande"})
+		return
+	}
+	file, err := header.Open()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No se pudo leer la imagen"})
 		return
 	}
 	defer func() { _ = file.Close() }()

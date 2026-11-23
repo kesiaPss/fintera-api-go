@@ -9,6 +9,7 @@ import (
 	"github.com/sjperalta/fintera-api/internal/models"
 	"github.com/sjperalta/fintera-api/internal/repository"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // Mock LedgerRepository
@@ -84,6 +85,31 @@ func (m *mockPaymentRepositoryWithOverdue) FindOverdue(ctx context.Context) ([]m
 		return m.mockFindOverdue(ctx)
 	}
 	return nil, nil
+}
+
+// FindOverdueInBatches feeds the mockFindOverdue dataset to fn in chunks, so
+// the batched job paths can be exercised with the same fixtures as FindOverdue.
+func (m *mockPaymentRepositoryWithOverdue) FindOverdueInBatches(ctx context.Context, batchSize int, fn func(batch []models.Payment) error) error {
+	if m.mockFindOverdue == nil {
+		return nil
+	}
+	payments, err := m.mockFindOverdue(ctx)
+	if err != nil {
+		return err
+	}
+	if batchSize <= 0 {
+		batchSize = 1
+	}
+	for start := 0; start < len(payments); start += batchSize {
+		end := start + batchSize
+		if end > len(payments) {
+			end = len(payments)
+		}
+		if err := fn(payments[start:end]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (m *mockPaymentRepositoryWithOverdue) Update(ctx context.Context, payment *models.Payment) error {
@@ -251,4 +277,69 @@ func TestCalculateOverdueInterest_Logic(t *testing.T) {
 	// but confirming it didn't panic is the main goal here.
 	// If we wanted to be strict:
 	// assert.True(t, notifCalled, "Notification should be created")
+}
+
+// TestCalculateOverdueInterest_FlushesEachBatch verifies the batched job: with
+// more overdue installments than one scan batch, ledger and payment updates
+// must be flushed per batch instead of accumulating the whole run.
+func TestCalculateOverdueInterest_FlushesEachBatch(t *testing.T) {
+	contract := models.Contract{
+		ID:     100,
+		Status: models.ContractStatusApproved,
+		Active: true,
+		LotID:  1,
+		Lot: models.Lot{
+			ID:        1,
+			ProjectID: 1,
+			Project:   models.Project{ID: 1, InterestRate: 10},
+		},
+	}
+	dueDate := time.Now().AddDate(0, 0, -10)
+
+	const total = repository.PaymentScanBatchSize + 100
+	payments := make([]models.Payment, total)
+	for i := range payments {
+		payments[i] = models.Payment{
+			ID:          uint(i + 1),
+			ContractID:  contract.ID,
+			Contract:    contract,
+			PaymentType: models.PaymentTypeInstallment,
+			Status:      models.PaymentStatusPending,
+			Amount:      1000,
+			DueDate:     dueDate,
+		}
+	}
+
+	mockPaymentRepo := &mockPaymentRepositoryWithOverdue{
+		mockFindOverdue: func(context.Context) ([]models.Payment, error) {
+			return payments, nil
+		},
+	}
+	var paymentFlushSizes []int
+	mockPaymentRepo.mockBatchUpdate = func(_ context.Context, updates map[uint]float64) error {
+		paymentFlushSizes = append(paymentFlushSizes, len(updates))
+		return nil
+	}
+
+	var ledgerFlushSizes []int
+	mockLedgerRepo := &mockLedgerRepository{
+		mockBatchUpsert: func(_ context.Context, entries []models.ContractLedgerEntry) error {
+			ledgerFlushSizes = append(ledgerFlushSizes, len(entries))
+			return nil
+		},
+	}
+
+	worker := jobs.NewWorker(0)
+	defer func() { _ = worker.Shutdown(context.Background()) }()
+
+	mockUserRepo := &mockUserRepository{}
+	mockUserRepo.mockFindAdmins = func(context.Context) ([]models.User, error) { return nil, nil }
+	notifService := NewNotificationService(&mockNotificationRepository{}, mockUserRepo)
+
+	service := NewPaymentService(mockPaymentRepo, nil, nil, mockLedgerRepo, nil, notifService, nil, nil, nil, worker)
+
+	require.NoError(t, service.CalculateOverdueInterest(context.Background()))
+
+	assert.Equal(t, []int{repository.PaymentScanBatchSize, 100}, ledgerFlushSizes)
+	assert.Equal(t, []int{repository.PaymentScanBatchSize, 100}, paymentFlushSizes)
 }

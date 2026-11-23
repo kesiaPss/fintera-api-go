@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"sync"
 	"time"
 
@@ -153,6 +154,48 @@ func (w *Worker) ScheduleEvery(name string, interval time.Duration, job Job) {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
+		for {
+			select {
+			case <-w.stopCtx.Done():
+				return
+			case <-ticker.C:
+				w.runScheduledJob(name, job)
+			}
+		}
+	}()
+}
+
+// ScheduleEveryImmediateJitter runs a job once shortly after startup - after a
+// random delay in [0, maxJitter) - then at fixed intervals. Use it instead of
+// ScheduleEveryImmediate for heavy jobs so a restart does not fire every job
+// in the same second: the delayed first runs spread the startup memory and CPU
+// burst and also desynchronize replicas. A delayed first run is abandoned
+// (without executing) if the worker is shut down during the jitter window.
+func (w *Worker) ScheduleEveryImmediateJitter(name string, interval, maxJitter time.Duration, job Job) {
+	if maxJitter <= 0 {
+		w.ScheduleEveryImmediate(name, interval, job)
+		return
+	}
+
+	w.wg.Add(1)
+	go func() {
+		defer w.wg.Done()
+
+		// Startup jitter is a timing offset to spread job loads, not a
+		// security boundary, so the weak PRNG is deliberate.
+		delay := time.Duration(rand.Int63n(int64(maxJitter))) // #nosec G404
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-w.stopCtx.Done():
+			return
+		case <-timer.C:
+		}
+
+		w.runScheduledJob(name, job)
+
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
 		for {
 			select {
 			case <-w.stopCtx.Done():

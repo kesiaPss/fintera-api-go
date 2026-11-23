@@ -4,30 +4,40 @@ import (
 	"bytes"
 	"encoding/csv"
 	"fmt"
+	"io"
 )
 
-// renderReportCSV renders a report document as plain CSV. It keeps the same
-// metadata, sections and totals as the XLSX/PDF renderers, but emits Spanish
-// headers as data rows with numeric money values (no currency symbol) and ISO
-// dates. It never adds visual styles.
+// renderReportCSV renders a report document as plain CSV into memory. It is a
+// thin wrapper over renderReportCSVTo for tests and callers that need bytes.
 func renderReportCSV(doc *ReportDocument) ([]byte, error) {
+	buffer := &bytes.Buffer{}
+	if err := renderReportCSVTo(buffer, doc); err != nil {
+		return nil, err
+	}
+	return buffer.Bytes(), nil
+}
+
+// renderReportCSVTo renders a report document as plain CSV directly into w. It
+// keeps the same metadata, sections and totals as the XLSX/PDF renderers, but
+// emits Spanish headers as data rows with numeric money values (no currency
+// symbol) and ISO dates. It never adds visual styles.
+func renderReportCSVTo(w io.Writer, doc *ReportDocument) error {
 	if doc == nil {
-		return nil, fmt.Errorf("csv renderer requires a report document")
+		return fmt.Errorf("csv renderer requires a report document")
 	}
 
-	buffer := &bytes.Buffer{}
-	writer := csv.NewWriter(buffer)
+	writer := csv.NewWriter(w)
 
 	write := func(record ...string) error {
 		return writer.Write(record)
 	}
 
 	if err := write(doc.Title); err != nil {
-		return nil, err
+		return err
 	}
 	if doc.Subtitle != "" {
 		if err := write(doc.Subtitle); err != nil {
-			return nil, err
+			return err
 		}
 	}
 	meta := make([][2]string, 0, 3)
@@ -42,24 +52,24 @@ func renderReportCSV(doc *ReportDocument) ([]byte, error) {
 	}
 	for _, entry := range meta {
 		if err := write(entry[0], entry[1]); err != nil {
-			return nil, err
+			return err
 		}
 	}
 
 	for _, section := range doc.Sections {
 		if err := write(); err != nil {
-			return nil, err
+			return err
 		}
 		if section.Title != "" {
 			if err := write(section.Title); err != nil {
-				return nil, err
+				return err
 			}
 		}
 
 		if section.Kind == ReportSectionNote {
 			if section.Note != "" {
 				if err := write(section.Note); err != nil {
-					return nil, err
+					return err
 				}
 			}
 			continue
@@ -76,32 +86,32 @@ func renderReportCSV(doc *ReportDocument) ([]byte, error) {
 		}
 		if len(headers) > 0 {
 			if err := write(headers...); err != nil {
-				return nil, err
+				return err
 			}
 		}
 
 		for _, row := range section.Rows {
 			if err := writeReportCSVRow(writer, row.Cells); err != nil {
-				return nil, err
+				return err
 			}
 		}
 		if section.Totals != nil {
 			if err := writeReportCSVRow(writer, section.Totals.Cells); err != nil {
-				return nil, err
+				return err
 			}
 		}
 		if section.Note != "" {
 			if err := write(section.Note); err != nil {
-				return nil, err
+				return err
 			}
 		}
 	}
 
 	writer.Flush()
 	if err := writer.Error(); err != nil {
-		return nil, fmt.Errorf("failed to write csv report: %w", err)
+		return fmt.Errorf("failed to write csv report: %w", err)
 	}
-	return buffer.Bytes(), nil
+	return nil
 }
 
 func writeReportCSVRow(writer *csv.Writer, cells []ReportCell) error {

@@ -136,20 +136,78 @@ func incomeFlowTypeAmounts(rows []models.CollectionTypeRow) [5]float64 {
 	return amounts
 }
 
-// incomeFlowPaymentMatches applies the project and seller scope to a payment
-// loaded with its contract, lot, project and applicant user.
-func incomeFlowPaymentMatches(payment models.Payment, filters ReportExportFilters) bool {
-	if filters.ProjectID != nil && payment.Contract.Lot.ProjectID != *filters.ProjectID {
-		return false
+// incomeFlowDetailSection loads the paid payments of the period and renders
+// the fiscal collection detail. The rows are read in keyset batches with the
+// project/seller scope applied in SQL (the previous PerPage=0 query loaded
+// every paid payment of the period and filtered in Go, duplicating the whole
+// slice). Detail rows are the only data kept: the payment models are released
+// after each batch.
+func (s *ReportExportService) incomeFlowDetailSection(ctx context.Context, filters ReportExportFilters) (ReportSection, error) {
+	type detailEntry struct {
+		date time.Time
+		row  ReportRow
 	}
-	if filters.FilterBySeller && filters.SellerID > 0 {
-		sellerMatch := payment.Contract.SellerID != nil && *payment.Contract.SellerID == filters.SellerID
-		creatorMatch := payment.Contract.CreatorID != nil && *payment.Contract.CreatorID == filters.SellerID
-		if !sellerMatch && !creatorMatch {
-			return false
-		}
+	var entries []detailEntry
+
+	err := s.paymentRepo.StreamPaidForReport(ctx, filters.StartDate, filters.EndDate,
+		filters.ProjectID, filters.SellerID, filters.FilterBySeller,
+		repository.PaymentScanBatchSize,
+		func(payments []models.Payment) error {
+			for i := range payments {
+				payment := &payments[i]
+
+				dateCell := TextCell("")
+				if payment.PaymentDate != nil {
+					dateCell = DateCell(*payment.PaymentDate)
+				}
+
+				amount := payment.Amount
+				if payment.PaidAmount != nil {
+					amount = *payment.PaidAmount
+				}
+
+				entries = append(entries, detailEntry{
+					date: incomeFlowPaymentDate(*payment),
+					row: ReportRow{
+						Cells: []ReportCell{
+							dateCell,
+							TextCell(payment.Contract.GUID),
+							TextCell(payment.Contract.ApplicantUser.FullName),
+							TextCell(payment.Contract.ApplicantUser.Identity),
+							TextCell(payment.Contract.ApplicantUser.RTN),
+							TextCell(incomeFlowBankReference(*payment)),
+							TextCell(TranslatePaymentType(payment.PaymentType)),
+							TextCell(payment.Contract.Lot.Project.Name),
+							TextCell(payment.Contract.Lot.Name),
+							MoneyCell(amount, payment.Contract.Currency),
+						},
+					},
+				})
+			}
+			return nil
+		})
+	if err != nil {
+		return ReportSection{}, fmt.Errorf("no se pudo obtener el detalle de cobranzas: %w", err)
 	}
-	return true
+
+	sort.SliceStable(entries, func(i, j int) bool {
+		return entries[i].date.Before(entries[j].date)
+	})
+
+	rows := make([]ReportRow, 0, len(entries))
+	for i := range entries {
+		rows = append(rows, entries[i].row)
+	}
+
+	return ReportSection{
+		Title: "Detalle de Cobranzas",
+		Kind:  ReportSectionTable,
+		Headers: []string{
+			"Fecha Pago", "Contrato", "Cliente", "Identidad", "RTN",
+			"Referencia Bancaria", "Tipo de Pago", "Proyecto", "Lote", "Monto",
+		},
+		Rows: rows,
+	}, nil
 }
 
 // incomeFlowBankReference returns the bank reference of a payment: the
@@ -172,75 +230,6 @@ func incomeFlowPaymentDate(payment models.Payment) time.Time {
 		return *payment.PaymentDate
 	}
 	return payment.DueDate
-}
-
-// incomeFlowDetailSection loads the paid payments of the period and renders
-// the fiscal collection detail. Pagination is disabled so every payment of the
-// requested period is included; project and seller scoping is applied in Go
-// after the repository preloads the contract, lot, project and applicant user.
-func (s *ReportExportService) incomeFlowDetailSection(ctx context.Context, filters ReportExportFilters) (ReportSection, error) {
-	query := repository.NewListQuery()
-	query.Filters["status"] = models.PaymentStatusPaid
-	if filters.StartDate != nil {
-		query.Filters["start_date"] = filters.StartDate.Format("2006-01-02")
-	}
-	if filters.EndDate != nil {
-		query.Filters["end_date"] = filters.EndDate.Format("2006-01-02")
-	}
-	query.PerPage = 0
-
-	payments, _, err := s.paymentRepo.List(ctx, query)
-	if err != nil {
-		return ReportSection{}, fmt.Errorf("no se pudo obtener el detalle de cobranzas: %w", err)
-	}
-
-	filtered := make([]models.Payment, 0, len(payments))
-	for _, payment := range payments {
-		if incomeFlowPaymentMatches(payment, filters) {
-			filtered = append(filtered, payment)
-		}
-	}
-	sort.SliceStable(filtered, func(i, j int) bool {
-		return incomeFlowPaymentDate(filtered[i]).Before(incomeFlowPaymentDate(filtered[j]))
-	})
-
-	rows := make([]ReportRow, 0, len(filtered))
-	for _, payment := range filtered {
-		dateCell := TextCell("")
-		if payment.PaymentDate != nil {
-			dateCell = DateCell(*payment.PaymentDate)
-		}
-
-		amount := payment.Amount
-		if payment.PaidAmount != nil {
-			amount = *payment.PaidAmount
-		}
-
-		rows = append(rows, ReportRow{
-			Cells: []ReportCell{
-				dateCell,
-				TextCell(payment.Contract.GUID),
-				TextCell(payment.Contract.ApplicantUser.FullName),
-				TextCell(payment.Contract.ApplicantUser.Identity),
-				TextCell(payment.Contract.ApplicantUser.RTN),
-				TextCell(incomeFlowBankReference(payment)),
-				TextCell(TranslatePaymentType(payment.PaymentType)),
-				TextCell(payment.Contract.Lot.Project.Name),
-				TextCell(payment.Contract.Lot.Name),
-				MoneyCell(amount, payment.Contract.Currency),
-			},
-		})
-	}
-
-	return ReportSection{
-		Title: "Detalle de Cobranzas",
-		Kind:  ReportSectionTable,
-		Headers: []string{
-			"Fecha Pago", "Contrato", "Cliente", "Identidad", "RTN",
-			"Referencia Bancaria", "Tipo de Pago", "Proyecto", "Lote", "Monto",
-		},
-		Rows: rows,
-	}, nil
 }
 
 // BuildIncomeFlowReport assembles the income flow report: monthly actual

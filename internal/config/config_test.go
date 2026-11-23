@@ -43,6 +43,7 @@ func TestLoad(t *testing.T) {
 		t.Setenv("JWT_SECRET", "super-secret")
 		t.Setenv("JWT_EXPIRATION_HOURS", "48")
 		t.Setenv("STORAGE_PATH", "/tmp/storage")
+		t.Setenv("MAX_JSON_BODY_BYTES", "5242880")
 		t.Setenv("WORKER_COUNT", "10")
 		t.Setenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:4000")
 		t.Setenv("APP_URL", "https://api.example.com")
@@ -81,6 +82,9 @@ func TestLoad(t *testing.T) {
 		}
 		if cfg.StoragePath != "/tmp/storage" {
 			t.Errorf("expected StoragePath /tmp/storage, got %s", cfg.StoragePath)
+		}
+		if cfg.MaxJSONBodyBytes != 5242880 {
+			t.Errorf("expected MaxJSONBodyBytes 5242880, got %d", cfg.MaxJSONBodyBytes)
 		}
 		if cfg.WorkerCount != 10 {
 			t.Errorf("expected WorkerCount 10, got %d", cfg.WorkerCount)
@@ -149,6 +153,9 @@ func TestLoad(t *testing.T) {
 		}
 		if cfg.StoragePath != "./storage" {
 			t.Errorf("expected StoragePath ./storage, got %s", cfg.StoragePath)
+		}
+		if cfg.MaxJSONBodyBytes != 2097152 {
+			t.Errorf("expected MaxJSONBodyBytes default 2097152, got %d", cfg.MaxJSONBodyBytes)
 		}
 		if cfg.WorkerCount != 5 {
 			t.Errorf("expected WorkerCount 5, got %d", cfg.WorkerCount)

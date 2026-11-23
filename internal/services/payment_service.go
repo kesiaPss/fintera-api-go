@@ -382,29 +382,28 @@ func (s *PaymentService) UpdateReceipt(ctx context.Context, id uint, path, autho
 }
 
 func (s *PaymentService) CheckOverduePayments(ctx context.Context) error {
-	payments, err := s.repo.FindOverdue(ctx)
-	if err != nil {
-		return err
-	}
+	notified := make(map[uint]struct{})
 
-	notified := make(map[uint]struct{}, len(payments))
-	for _, payment := range payments {
-		userID := payment.Contract.ApplicantUserID
-		if userID == 0 {
-			continue
+	// Stream the overdue dataset in batches; the dedupe map persists across
+	// batches so each user is notified at most once per run.
+	return s.repo.FindOverdueInBatches(ctx, repository.PaymentScanBatchSize, func(payments []models.Payment) error {
+		for _, payment := range payments {
+			userID := payment.Contract.ApplicantUserID
+			if userID == 0 {
+				continue
+			}
+			if _, ok := notified[userID]; ok {
+				continue
+			}
+			notified[userID] = struct{}{}
+
+			logIgnoredError("notify overdue payment", s.notificationSvc.NotifyUser(ctx, userID,
+				"Pago vencido",
+				"Tienes un pago vencido pendiente",
+				models.NotificationTypePaymentOverdue))
 		}
-		if _, ok := notified[userID]; ok {
-			continue
-		}
-		notified[userID] = struct{}{}
-
-		logIgnoredError("notify overdue payment", s.notificationSvc.NotifyUser(ctx, userID,
-			"Pago vencido",
-			"Tienes un pago vencido pendiente",
-			models.NotificationTypePaymentOverdue))
-	}
-
-	return nil
+		return nil
+	})
 }
 
 // SendDailyPaymentReminderEmails sends overdue payment reminder emails to active users with active contracts.
@@ -528,93 +527,92 @@ func (s *PaymentService) updateContractBalance(ctx context.Context, contractID u
 	return nil
 }
 
-// CalculateOverdueInterest calculates and applies interest for overdue payments
-// CalculateOverdueInterest calculates and applies interest for overdue payments
+// CalculateOverdueInterest calculates and applies interest for overdue payments.
+// The dataset is streamed in keyset batches so memory stays bounded no matter
+// how many installments are overdue: ledger entries and payment updates are
+// flushed per batch instead of accumulated for the whole run.
 func (s *PaymentService) CalculateOverdueInterest(ctx context.Context) error {
-	// Find all overdue payments (pending status and due_date < today)
-	// We need to preload Contract -> Lot -> Project to get InterestRate
-	// And filter for Approved contracts only
-	payments, err := s.repo.FindOverdue(ctx)
-	if err != nil {
-		return err
-	}
-
 	overdueCount := 0
 	totalInterestCalculated := 0.0
 
-	var ledgerEntries []models.ContractLedgerEntry
-	paymentUpdates := make(map[uint]float64)
+	err := s.repo.FindOverdueInBatches(ctx, repository.PaymentScanBatchSize, func(payments []models.Payment) error {
+		var ledgerEntries []models.ContractLedgerEntry
+		paymentUpdates := make(map[uint]float64)
 
-	for _, payment := range payments {
-		// Filter: Only Installments
-		if payment.PaymentType != models.PaymentTypeInstallment {
-			continue
+		for _, payment := range payments {
+			// Filter: Only Installments
+			if payment.PaymentType != models.PaymentTypeInstallment {
+				continue
+			}
+
+			// Filter: Only Approved active contracts
+			if payment.Contract.Status != models.ContractStatusApproved || !payment.Contract.Active {
+				continue
+			}
+
+			// Calculate days overdue
+			if time.Now().Before(payment.DueDate) {
+				continue
+			}
+			daysOverdue := int(time.Since(payment.DueDate).Hours() / 24)
+			if daysOverdue <= 0 {
+				continue
+			}
+
+			// Get Interest Rate from Project (preloaded by FindOverdueInBatches).
+			// Requirement: when no interest_rate exists at project level the default is 0.
+			interestRate := 0.0
+			if payment.Contract.LotID != 0 && payment.Contract.Lot.ProjectID != 0 {
+				interestRate = payment.Contract.Lot.Project.InterestRate / 100.0 // Convert percentage to decimal
+			}
+			if interestRate <= 0 {
+				continue
+			}
+
+			// Formula: amount * (days / 365) * rate
+			// Logic: "amount of debt" = payment.Amount (the installment amount)
+			interestAmount := (payment.Amount * float64(daysOverdue) / 365.0) * interestRate
+
+			// Rule: "balance and ledger has debt form, everything start in negative then down to zero"
+			// Logic: Interest increases debt. Debt is negative. So Interest Entry must be NEGATIVE.
+			description := fmt.Sprintf("Interés acumulado por mora (%d días) - Pago #%d", daysOverdue, payment.ID)
+
+			entry := models.ContractLedgerEntry{
+				ContractID:  payment.ContractID,
+				PaymentID:   &payment.ID,
+				Amount:      -interestAmount, // NEGATIVE to increase debt
+				Description: description,
+				EntryType:   models.EntryTypeInterest,
+				EntryDate:   time.Now(),
+			}
+
+			ledgerEntries = append(ledgerEntries, entry)
+			paymentUpdates[payment.ID] = interestAmount
+
+			overdueCount++
+			totalInterestCalculated += interestAmount
 		}
 
-		// Filter: Only Approved active contracts
-		if payment.Contract.Status != models.ContractStatusApproved || !payment.Contract.Active {
-			continue
+		// Flush this batch. Batch update ledger entries
+		if len(ledgerEntries) > 0 {
+			if err := s.ledgerRepo.BatchUpsertInterest(ctx, ledgerEntries); err != nil {
+				logger.Error("Failed to batch update interest ledger entries", "error", err)
+				return err
+			}
 		}
 
-		// Calculate days overdue
-		if time.Now().Before(payment.DueDate) {
-			continue
-		}
-		daysOverdue := int(time.Since(payment.DueDate).Hours() / 24)
-		if daysOverdue <= 0 {
-			continue
-		}
-
-		// Get Interest Rate from Project
-		interestRate := 0.0
-		if payment.Contract.LotID != 0 && payment.Contract.Lot.ProjectID != 0 {
-			// Assuming Lot and Project are preloaded by FindOverdue
-			interestRate = payment.Contract.Lot.Project.InterestRate / 100.0 // Convert percentage to decimal
+		// Batch update payments
+		if len(paymentUpdates) > 0 {
+			if err := s.repo.BatchUpdateInterest(ctx, paymentUpdates); err != nil {
+				logger.Error("Failed to batch update payment interest amounts", "error", err)
+				return err
+			}
 		}
 
-		// Specific requirement: "if not found an interest_rate in the project level then the defult is 0"
-		if interestRate <= 0 {
-			continue
-		}
-
-		// Formula: amount * (days / 365) * rate
-		// Logic: "amount of debt" = payment.Amount (the installment amount)
-		interestAmount := (payment.Amount * float64(daysOverdue) / 365.0) * interestRate
-
-		// Rule: "balance and ledger has debt form, everything start in negative then down to zero"
-		// Logic: Interest increases debt. Debt is negative. So Interest Entry must be NEGATIVE.
-		description := fmt.Sprintf("Interés acumulado por mora (%d días) - Pago #%d", daysOverdue, payment.ID)
-
-		entry := models.ContractLedgerEntry{
-			ContractID:  payment.ContractID,
-			PaymentID:   &payment.ID,
-			Amount:      -interestAmount, // NEGATIVE to increase debt
-			Description: description,
-			EntryType:   models.EntryTypeInterest,
-			EntryDate:   time.Now(),
-		}
-
-		ledgerEntries = append(ledgerEntries, entry)
-		paymentUpdates[payment.ID] = interestAmount
-
-		overdueCount++
-		totalInterestCalculated += interestAmount
-	}
-
-	// Batch update ledger entries
-	if len(ledgerEntries) > 0 {
-		if err := s.ledgerRepo.BatchUpsertInterest(ctx, ledgerEntries); err != nil {
-			logger.Error("Failed to batch update interest ledger entries", "error", err)
-			return err
-		}
-	}
-
-	// Batch update payments
-	if len(paymentUpdates) > 0 {
-		if err := s.repo.BatchUpdateInterest(ctx, paymentUpdates); err != nil {
-			logger.Error("Failed to batch update payment interest amounts", "error", err)
-			return err
-		}
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 
 	// Notify Admins

@@ -207,6 +207,81 @@ func TestRenderReportXLSX(t *testing.T) {
 	assert.Contains(t, usdFormat, "$")
 }
 
+// TestRenderReportToMatchesBufferedBytes guards the streaming refactor. CSV
+// bytes must match the buffered wrapper exactly; the PDF wrapper IS the
+// writer target (so identity holds by construction) and gofpdf is not
+// deterministic across calls (font object ordering varies), so the PDF check
+// is structural instead of byte-level.
+func TestRenderReportToMatchesBufferedBytes(t *testing.T) {
+	doc := sampleReportDocument()
+	svc := NewReportExportService(nil, nil, nil, nil, nil)
+
+	data, err := svc.RenderReport(doc, ReportFormatCSV, "")
+	require.NoError(t, err)
+	var csvBuffer bytes.Buffer
+	require.NoError(t, svc.RenderReportTo(&csvBuffer, doc, ReportFormatCSV, ""))
+	assert.Equal(t, data, csvBuffer.Bytes(), "CSV streaming bytes must match")
+
+	var pdfBuffer bytes.Buffer
+	require.NoError(t, svc.RenderReportTo(&pdfBuffer, doc, ReportFormatPDF, ""))
+	assert.True(t, bytes.HasPrefix(pdfBuffer.Bytes(), []byte("%PDF")), "streamed output should be a PDF")
+	assert.Greater(t, pdfBuffer.Len(), 1024, "streamed PDF should not be tiny")
+}
+
+// TestRenderReportXLSXStreamStructure locks the sheet-level properties the
+// StreamWriter path must preserve: merged banner ranges, explicit measured
+// column widths, a frozen header pane and raw numeric money values.
+func TestRenderReportXLSXStreamStructure(t *testing.T) {
+	doc := sampleReportDocument()
+
+	data, err := renderReportXLSX(doc, ReportSheetOperations)
+	require.NoError(t, err)
+
+	file, err := excelize.OpenReader(bytes.NewReader(data))
+	require.NoError(t, err)
+	defer func() { _ = file.Close() }()
+
+	sheet := ReportSheetOperations
+
+	merges, err := file.GetMergeCells(sheet)
+	require.NoError(t, err)
+	require.NotEmpty(t, merges, "title banner, subtitle, meta, section titles and notes are merged rows")
+
+	titleMerged := false
+	for _, merge := range merges {
+		topLeft := merge.GetStartAxis()
+		if topLeft == "A1" {
+			assert.Equal(t, "G1", merge.GetEndAxis(), "the title banner spans the widest section")
+			titleMerged = true
+		}
+	}
+	require.True(t, titleMerged, "the title row is merged across the table")
+
+	width, err := file.GetColWidth(sheet, "A")
+	require.NoError(t, err)
+	assert.Greater(t, width, 0.0, "column A carries an explicit measured width")
+
+	panes, err := file.GetPanes(sheet)
+	require.NoError(t, err)
+	require.NotNil(t, panes)
+	assert.True(t, panes.Freeze, "the header pane stays frozen")
+	assert.Greater(t, panes.YSplit, 0, "the freeze happens below the header rows")
+
+	// Raw numeric money cells are asserted in TestRenderReportXLSX; here the
+	// formatted display text confirms the values survived streaming.
+	rows, err := file.GetRows(sheet)
+	require.NoError(t, err)
+	formattedMoney := false
+	for _, row := range rows {
+		for _, cell := range row {
+			if strings.Contains(cell, "500,000.00") {
+				formattedMoney = true
+			}
+		}
+	}
+	assert.True(t, formattedMoney, "money values survive the stream writer")
+}
+
 func TestRenderReportCSV(t *testing.T) {
 	doc := sampleReportDocument()
 

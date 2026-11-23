@@ -34,6 +34,28 @@ func (r *commissionsContractRepo) List(_ context.Context, query *repository.Cont
 	return own, int64(len(own)), nil
 }
 
+// StreamForCommissions chunks this stub's List result so the batched
+// GenerateCommissions path works with the existing fixtures.
+func (r *commissionsContractRepo) StreamForCommissions(ctx context.Context, query *repository.ContractQuery, batchSize int, fn func(batch []models.Contract) error) error {
+	contracts, _, err := r.List(ctx, query)
+	if err != nil {
+		return err
+	}
+	if batchSize <= 0 {
+		batchSize = len(contracts)
+	}
+	for start := 0; start < len(contracts); start += batchSize {
+		end := start + batchSize
+		if end > len(contracts) {
+			end = len(contracts)
+		}
+		if err := fn(contracts[start:end]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 type commissionsCreditRepo struct {
 	repository.CommissionRepository
 	credits []models.SellerCommissionCredit

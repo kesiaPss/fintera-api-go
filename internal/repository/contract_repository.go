@@ -21,6 +21,13 @@ type ContractRepository interface {
 	Update(ctx context.Context, contract *models.Contract) error
 	Delete(ctx context.Context, id uint) error
 	List(ctx context.Context, query *ContractQuery) ([]models.Contract, int64, error)
+	// StreamForCommissions reads contracts for the commissions report in
+	// keyset batches (created_at, id) descending, applying only the filters
+	// the report uses (seller scope, status_in, commission date range) and the
+	// associations the report reads. It skips the TotalPaid aggregate and the
+	// next-payment attachment that List performs, so peak memory is one batch
+	// regardless of how many contracts match.
+	StreamForCommissions(ctx context.Context, query *ContractQuery, batchSize int, fn func(batch []models.Contract) error) error
 	FindActiveByLot(ctx context.Context, lotID uint) (*models.Contract, error)
 	FindPendingReservations(ctx context.Context, olderThan int) ([]models.Contract, error)
 	FindReservationsAwaitingVoucher(ctx context.Context, olderThanHours int) ([]models.Contract, error)
@@ -323,9 +330,85 @@ func (r *contractRepository) List(ctx context.Context, query *ContractQuery) ([]
 	return contracts, total, err
 }
 
+// StreamForCommissions reads contracts for the commissions report in keyset
+// batches ordered (created_at, id) DESC to match List's default order, using a
+// Postgres row-value cursor. It applies only the filters GenerateCommissions
+// sets and preloads only the associations it reads, skipping the TotalPaid
+// aggregate and next-payment attachment. See the interface doc for rationale.
+func (r *contractRepository) StreamForCommissions(ctx context.Context, query *ContractQuery, batchSize int, fn func(batch []models.Contract) error) error {
+	if batchSize <= 0 {
+		batchSize = PaymentScanBatchSize
+	}
+
+	var (
+		cursorTime time.Time
+		cursorID   uint
+		hasCursor  bool
+	)
+	for {
+		db := r.db.WithContext(ctx).Model(&models.Contract{})
+
+		if !query.IsAdmin && query.UserID > 0 {
+			if query.FilterBySeller {
+				db = db.Where("(contracts.creator_id = ? OR (contracts.seller_id = ? AND contracts.assignment_status = ?))",
+					query.UserID, query.UserID, models.AssignmentStatusAccepted)
+			} else {
+				db = db.Where("creator_id = ?", query.UserID)
+			}
+		}
+
+		if query.Filters != nil {
+			if val := query.Filters["status_in"]; val != "" {
+				statuses := strings.Split(val, ",")
+				for i, s := range statuses {
+					statuses[i] = strings.TrimSpace(s)
+				}
+				db = db.Where("contracts.status IN ?", statuses)
+			}
+			if val, ok := query.Filters["commission_from"]; ok && val != "" {
+				db = db.Where("(contracts.commission_accrual_date >= ? OR (contracts.commission_accrual_date IS NULL AND contracts.approved_at >= ?))", val, val)
+			}
+			if val, ok := query.Filters["commission_to"]; ok && val != "" {
+				db = db.Where("(contracts.commission_accrual_date <= ? OR (contracts.commission_accrual_date IS NULL AND contracts.approved_at < (?::date + INTERVAL '1 day')))", val, val)
+			}
+		}
+
+		if hasCursor {
+			db = db.Where("(contracts.created_at, contracts.id) < (?, ?)", cursorTime, cursorID)
+		}
+
+		var batch []models.Contract
+		err := db.
+			Preload("ApplicantUser").
+			Preload("Lot.Project").
+			Preload("Seller").
+			Preload("Creator").
+			Order("contracts.created_at DESC, contracts.id DESC").
+			Limit(batchSize).
+			Find(&batch).Error
+		if err != nil {
+			return err
+		}
+		if len(batch) == 0 {
+			return nil
+		}
+		if err := fn(batch); err != nil {
+			return err
+		}
+		if len(batch) < batchSize {
+			return nil
+		}
+		last := batch[len(batch)-1]
+		cursorTime, cursorID = last.CreatedAt, last.ID
+		hasCursor = true
+	}
+}
+
 // loadNextPayments fills Contract.NextPayment for each contract using one
 // batched query. Payments with a receipt are skipped because they are already
-// in review, matching models.FindCollectablePayment.
+// in review, matching models.FindCollectablePayment. DISTINCT ON reads at most
+// one row per contract (the earliest due date, then lowest id) instead of
+// scanning every collectable installment of every contract on the page.
 func (r *contractRepository) loadNextPayments(ctx context.Context, contracts []models.Contract) error {
 	ids := make([]uint, 0, len(contracts))
 	indexByID := make(map[uint]int, len(contracts))
@@ -336,10 +419,11 @@ func (r *contractRepository) loadNextPayments(ctx context.Context, contracts []m
 
 	var payments []models.Payment
 	err := r.db.WithContext(ctx).
+		Select("DISTINCT ON (contract_id) payments.*").
 		Where("contract_id IN ?", ids).
 		Where("status IN ?", []string{models.PaymentStatusPending, models.PaymentStatusSubmitted}).
 		Where("(document_path IS NULL OR document_path = '')").
-		Order("due_date ASC, id ASC").
+		Order("contract_id ASC, due_date ASC, id ASC").
 		Find(&payments).Error
 	if err != nil {
 		return err
@@ -347,7 +431,7 @@ func (r *contractRepository) loadNextPayments(ctx context.Context, contracts []m
 
 	for i := range payments {
 		index, ok := indexByID[payments[i].ContractID]
-		if !ok || contracts[index].NextPayment != nil {
+		if !ok {
 			continue
 		}
 		payment := payments[i]
@@ -554,6 +638,15 @@ type PaymentRepository interface {
 	UpdateStatusByContract(ctx context.Context, contractID uint, fromStatuses []string, toStatus string) error
 	List(ctx context.Context, query *ListQuery) ([]models.Payment, int64, error)
 	FindOverdue(ctx context.Context) ([]models.Payment, error)
+	// FindOverdueInBatches streams the FindOverdue dataset in keyset-paged
+	// batches of batchSize rows (payments.id > cursor), invoking fn once per
+	// batch. Memory stays bounded regardless of how many payments match, which
+	// matters for the scheduled interest and notification jobs.
+	FindOverdueInBatches(ctx context.Context, batchSize int, fn func(batch []models.Payment) error) error
+	// StreamPaidForReport reads paid payments for the income-flow export in
+	// keyset batches, with optional date bounds and the project/seller scope
+	// applied in SQL so out-of-scope rows never reach Go.
+	StreamPaidForReport(ctx context.Context, startDate, endDate *time.Time, projectID *uint, sellerID uint, filterBySeller bool, batchSize int, fn func(batch []models.Payment) error) error
 	// FindOverdueReminders returns overdue payments with their contract,
 	// applicant user, lot, and project in a single joined query.
 	FindOverdueReminders(ctx context.Context) ([]models.Payment, error)
@@ -574,6 +667,11 @@ type PaymentRepository interface {
 // query does not force every payment fake to implement it.
 type OverdueReportRepository interface {
 	FindOverdueForActiveContractsDetailed(ctx context.Context) ([]models.Payment, error)
+	// StreamOverdueForActiveContractsDetailed reads the same dataset as
+	// FindOverdueForActiveContractsDetailed in keyset batches, applying the
+	// seller/project scope in SQL. The overdue export uses it so peak memory
+	// is one batch of payments instead of the whole overdue portfolio.
+	StreamOverdueForActiveContractsDetailed(ctx context.Context, projectID *uint, sellerID uint, filterBySeller bool, batchSize int, fn func(batch []models.Payment) error) error
 }
 
 type paymentRepository struct {
@@ -681,6 +779,24 @@ func (r *paymentRepository) List(ctx context.Context, query *ListQuery) ([]model
 		db = db.Where("payments.payment_date <= ? OR (payments.payment_date IS NULL AND payments.due_date <= ?)", endDate, endDate)
 	}
 
+	// Report scoping filters. These mirror the semantics previously applied
+	// in Go by incomeFlowPaymentMatches, so out-of-scope rows never leave the
+	// database: project_id matches the project owning the contract's lot;
+	// seller_id matches either the assigned seller or the seller who created
+	// the contract.
+	projectID := strings.TrimSpace(query.Filters["project_id"])
+	sellerID := strings.TrimSpace(query.Filters["seller_id"])
+	if projectID != "" || sellerID != "" {
+		db = db.Joins("JOIN contracts AS rep_c ON rep_c.id = payments.contract_id")
+		if sellerID != "" {
+			db = db.Where("(rep_c.seller_id = ? OR rep_c.creator_id = ?)", sellerID, sellerID)
+		}
+		if projectID != "" {
+			db = db.Joins("JOIN lots AS rep_l ON rep_l.id = rep_c.lot_id").
+				Where("rep_l.project_id = ?", projectID)
+		}
+	}
+
 	// Apply search filter if provided (case-insensitive across multiple fields)
 	if search := query.Filters["search_term"]; search != "" {
 		term := "%" + search + "%"
@@ -766,6 +882,110 @@ func (r *paymentRepository) FindOverdue(ctx context.Context) ([]models.Payment, 
 		Order("due_date ASC").
 		Find(&payments).Error
 	return payments, err
+}
+
+// StreamPaidForReport reads paid payments in keyset batches (payments.id >
+// cursor) with the project/seller scope and date bounds applied in SQL, so the
+// income-flow detail never loads out-of-scope rows into Go. Preloads mirror the
+// associations the report reads (contract, lot, project, applicant).
+func (r *paymentRepository) StreamPaidForReport(ctx context.Context, startDate, endDate *time.Time, projectID *uint, sellerID uint, filterBySeller bool, batchSize int, fn func(batch []models.Payment) error) error {
+	if batchSize <= 0 {
+		batchSize = PaymentScanBatchSize
+	}
+	var lastID uint
+	for {
+		db := r.db.WithContext(ctx).Model(&models.Payment{}).
+			Where("payments.status = ?", models.PaymentStatusPaid).
+			Where("payments.id > ?", lastID)
+		if startDate != nil {
+			db = db.Where("payments.payment_date >= ? OR (payments.payment_date IS NULL AND payments.due_date >= ?)", startDate, startDate)
+		}
+		if endDate != nil {
+			// Date-only bounds arrive at midnight; include the full day like
+			// the List string filter did ("YYYY-MM-DD 23:59:59").
+			bound := *endDate
+			if midnight := time.Date(bound.Year(), bound.Month(), bound.Day(), 0, 0, 0, 0, bound.Location()); bound.Equal(midnight) {
+				bound = midnight.AddDate(0, 0, 1).Add(-time.Second)
+			}
+			db = db.Where("payments.payment_date <= ? OR (payments.payment_date IS NULL AND payments.due_date <= ?)", bound, bound)
+		}
+		db = applyReportScope(db, projectID, sellerID, filterBySeller)
+
+		var batch []models.Payment
+		err := db.Select("payments.*").
+			Preload("Contract.Lot.Project").
+			Preload("Contract.ApplicantUser").
+			Order("payments.id ASC").
+			Limit(batchSize).
+			Find(&batch).Error
+		if err != nil {
+			return err
+		}
+		if len(batch) == 0 {
+			return nil
+		}
+		if err := fn(batch); err != nil {
+			return err
+		}
+		if len(batch) < batchSize {
+			return nil
+		}
+		lastID = batch[len(batch)-1].ID
+	}
+}
+
+// applyReportScope adds the shared project and seller scoping joins/predicates
+// to a payments query. Seller scope matches the assigned seller or the original
+// creator; project scope matches the project owning the contract's lot.
+func applyReportScope(db *gorm.DB, projectID *uint, sellerID uint, filterBySeller bool) *gorm.DB {
+	sellerScoped := filterBySeller && sellerID > 0
+	if projectID == nil && !sellerScoped {
+		return db
+	}
+	db = db.Joins("JOIN contracts AS rep_c ON rep_c.id = payments.contract_id")
+	if sellerScoped {
+		db = db.Where("(rep_c.seller_id = ? OR rep_c.creator_id = ?)", sellerID, sellerID)
+	}
+	if projectID != nil {
+		db = db.Joins("JOIN lots AS rep_l ON rep_l.id = rep_c.lot_id").
+			Where("rep_l.project_id = ?", *projectID)
+	}
+	return db
+}
+
+// PaymentScanBatchSize is the default row count per batch for the streaming
+// payment scans used by the scheduled jobs and report exports.
+const PaymentScanBatchSize = 500
+
+func (r *paymentRepository) FindOverdueInBatches(ctx context.Context, batchSize int, fn func(batch []models.Payment) error) error {
+	if batchSize <= 0 {
+		batchSize = PaymentScanBatchSize
+	}
+	var lastID uint
+	for {
+		var batch []models.Payment
+		err := r.db.WithContext(ctx).
+			Where("payments.status = ? AND payments.due_date < CURRENT_DATE", models.PaymentStatusPending).
+			Where("payments.id > ?", lastID).
+			Order("payments.id ASC").
+			Limit(batchSize).
+			Preload("Contract.Lot.Project").
+			Preload("Contract.ApplicantUser").
+			Find(&batch).Error
+		if err != nil {
+			return err
+		}
+		if len(batch) == 0 {
+			return nil
+		}
+		if err := fn(batch); err != nil {
+			return err
+		}
+		if len(batch) < batchSize {
+			return nil
+		}
+		lastID = batch[len(batch)-1].ID
+	}
 }
 
 // reminderRow is the flat projection shared by the daily reminder queries. It
@@ -879,6 +1099,52 @@ func (r *paymentRepository) FindOverdueForActiveContractsDetailed(ctx context.Co
 		Order("payments.due_date ASC").
 		Find(&payments).Error
 	return payments, err
+}
+
+// StreamOverdueForActiveContractsDetailed reads the overdue export dataset in
+// keyset batches (payments.id > cursor) with the seller/project scope applied
+// in SQL. Rows arrive in id order; the builder re-sorts by due date, so the
+// rendered report is unchanged while peak memory is one batch.
+func (r *paymentRepository) StreamOverdueForActiveContractsDetailed(ctx context.Context, projectID *uint, sellerID uint, filterBySeller bool, batchSize int, fn func(batch []models.Payment) error) error {
+	if batchSize <= 0 {
+		batchSize = PaymentScanBatchSize
+	}
+	var lastID uint
+	for {
+		db := r.db.WithContext(ctx).
+			Joins("JOIN contracts ON contracts.id = payments.contract_id AND contracts.status IN ? AND contracts.active = ?",
+				[]string{models.ContractStatusApproved, models.ContractStatusSigned}, true).
+			Where("payments.status = ? AND payments.due_date < CURRENT_DATE", models.PaymentStatusPending).
+			Where("payments.id > ?", lastID)
+		if filterBySeller && sellerID > 0 {
+			db = db.Where("(contracts.seller_id = ? OR contracts.creator_id = ?)", sellerID, sellerID)
+		}
+		if projectID != nil {
+			db = db.Where("contracts.lot_id IN (SELECT id FROM lots WHERE project_id = ?)", *projectID)
+		}
+
+		var batch []models.Payment
+		err := db.
+			Preload("Contract").
+			Preload("Contract.ApplicantUser").
+			Preload("Contract.Lot.Project").
+			Order("payments.id ASC").
+			Limit(batchSize).
+			Find(&batch).Error
+		if err != nil {
+			return err
+		}
+		if len(batch) == 0 {
+			return nil
+		}
+		if err := fn(batch); err != nil {
+			return err
+		}
+		if len(batch) < batchSize {
+			return nil
+		}
+		lastID = batch[len(batch)-1].ID
+	}
 }
 
 // FindUpcomingReminders returns pending payments due tomorrow for active

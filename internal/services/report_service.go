@@ -85,7 +85,8 @@ func (s *ReportService) SetScoreService(scoreSvc *ScoreService) {
 // sales use their sale date, so both land in the period the UI selected.
 func (s *ReportService) GenerateCommissions(ctx context.Context, startDate, endDate string, userID uint, filterByCreator bool) ([]CommissionReportItem, error) {
 	listQuery := repository.NewListQuery()
-	listQuery.PerPage = 0 // Fetch ALL contracts, no pagination limit
+	// The stream reads in fixed batches; Page/PerPage are not used.
+	listQuery.PerPage = 0
 
 	if startDate != "" && endDate != "" {
 		// Commission reports follow the accrual date, which is the approval
@@ -106,11 +107,6 @@ func (s *ReportService) GenerateCommissions(ctx context.Context, startDate, endD
 		Status: "",
 	}
 
-	contracts, _, err := s.contractRepo.List(ctx, query)
-	if err != nil {
-		return nil, err
-	}
-
 	start, end, hasPeriod := parseReportPeriod(startDate, endDate)
 
 	var items []CommissionReportItem
@@ -121,80 +117,91 @@ func (s *ReportService) GenerateCommissions(ctx context.Context, startDate, endD
 		models.FinancingTypeCash:   "Contado",
 	}
 
-	for _, c := range contracts {
-		commissionDate := c.CommissionDate()
-		if hasPeriod && (commissionDate == nil || !withinReportPeriod(*commissionDate, start, end)) {
-			continue
-		}
-
-		clientName := "N/A"
-		if c.ApplicantUser.ID != 0 {
-			clientName = c.ApplicantUser.FullName
-		}
-
-		projectName := "N/A"
-		lotNumber := "N/A"
-		if c.Lot.ID != 0 {
-			lotNumber = c.Lot.Name
-			if c.Lot.Project.ID != 0 {
-				projectName = c.Lot.Project.Name
+	// Read contracts in keyset batches: peak memory is one batch of contracts
+	// (preloading only the associations this report reads, and skipping the
+	// TotalPaid aggregate and next-payment attachment List would add) instead
+	// of every approved and closed contract at once. Row order matches the
+	// previous List path (created_at DESC), so the JSON report is unchanged.
+	err := s.contractRepo.StreamForCommissions(ctx, query, repository.PaymentScanBatchSize, func(contracts []models.Contract) error {
+		for _, c := range contracts {
+			commissionDate := c.CommissionDate()
+			if hasPeriod && (commissionDate == nil || !withinReportPeriod(*commissionDate, start, end)) {
+				continue
 			}
-		}
 
-		amount := 0.0
-		if c.Amount != nil {
-			amount = *c.Amount
-		}
+			clientName := "N/A"
+			if c.ApplicantUser.ID != 0 {
+				clientName = c.ApplicantUser.FullName
+			}
 
-		dateStr := ""
-		if commissionDate != nil {
-			dateStr = commissionDate.Format("2006-01-02")
-		}
+			projectName := "N/A"
+			lotNumber := "N/A"
+			if c.Lot.ID != 0 {
+				lotNumber = c.Lot.Name
+				if c.Lot.Project.ID != 0 {
+					projectName = c.Lot.Project.Name
+				}
+			}
 
-		sellerName := "Unknown"
-		if c.Seller != nil && c.Seller.FullName != "" {
-			sellerName = c.Seller.FullName
-		} else if c.Creator != nil && c.Creator.FullName != "" &&
-			(c.Creator.IsSeller() || c.Creator.IsAdmin()) {
-			sellerName = c.Creator.FullName
-		}
-		commission := c.CommissionAmount
-		if commission == 0 {
-			commission = c.CalculateCommission()
-		}
+			amount := 0.0
+			if c.Amount != nil {
+				amount = *c.Amount
+			}
 
-		financingType := c.FinancingType
-		if val, ok := financingTypeTranslations[financingType]; ok {
-			financingType = val
-		}
+			dateStr := ""
+			if commissionDate != nil {
+				dateStr = commissionDate.Format("2006-01-02")
+			}
 
-		origin := c.CommissionOrigin
-		if origin == "" {
-			origin = models.CommissionOriginDirect
-		}
+			sellerName := "Unknown"
+			if c.Seller != nil && c.Seller.FullName != "" {
+				sellerName = c.Seller.FullName
+			} else if c.Creator != nil && c.Creator.FullName != "" &&
+				(c.Creator.IsSeller() || c.Creator.IsAdmin()) {
+				sellerName = c.Creator.FullName
+			}
+			commission := c.CommissionAmount
+			if commission == 0 {
+				commission = c.CalculateCommission()
+			}
 
-		sellerID := c.SellerID
-		if sellerID == nil && c.Creator != nil && c.Creator.IsSeller() {
-			creatorID := c.Creator.ID
-			sellerID = &creatorID
-		}
+			financingType := c.FinancingType
+			if val, ok := financingTypeTranslations[financingType]; ok {
+				financingType = val
+			}
 
-		items = append(items, CommissionReportItem{
-			ContractID:       c.ID,
-			ContractGUID:     c.GUID,
-			CommissionPaidAt: c.CommissionPaidAt,
-			CommissionStatus: commissionStatusForContract(c),
-			Origin:           origin,
-			ClientName:       clientName,
-			Project:          projectName,
-			Lot:              lotNumber,
-			FinancingType:    financingType,
-			Amount:           amount,
-			Date:             dateStr,
-			Seller:           sellerName,
-			SellerID:         sellerID,
-			Commission:       commission,
-		})
+			origin := c.CommissionOrigin
+			if origin == "" {
+				origin = models.CommissionOriginDirect
+			}
+
+			sellerID := c.SellerID
+			if sellerID == nil && c.Creator != nil && c.Creator.IsSeller() {
+				creatorID := c.Creator.ID
+				sellerID = &creatorID
+			}
+
+			items = append(items, CommissionReportItem{
+				ContractID:       c.ID,
+				ContractGUID:     c.GUID,
+				CommissionPaidAt: c.CommissionPaidAt,
+				CommissionStatus: commissionStatusForContract(c),
+				Origin:           origin,
+				ClientName:       clientName,
+				Project:          projectName,
+				Lot:              lotNumber,
+				FinancingType:    financingType,
+				Amount:           amount,
+				Date:             dateStr,
+				Seller:           sellerName,
+				SellerID:         sellerID,
+				Commission:       commission,
+			})
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	if s.historicalRepo != nil {

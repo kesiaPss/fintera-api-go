@@ -154,3 +154,35 @@ func TestShutdownStopsScheduledRuns(t *testing.T) {
 	time.Sleep(30 * time.Millisecond)
 	assert.Equal(t, stopped, runs.Load())
 }
+
+func TestScheduleEveryImmediateJitterRunsAfterDelayAndRepeats(t *testing.T) {
+	w := NewWorker(1)
+	defer func() { _ = w.Shutdown(context.Background()) }()
+
+	var runs atomic.Int32
+	w.ScheduleEveryImmediateJitter("test", 20*time.Millisecond, 100*time.Millisecond, func(context.Context) error {
+		runs.Add(1)
+		return nil
+	})
+
+	require.Eventually(t, func() bool { return runs.Load() >= 2 }, 2*time.Second, 10*time.Millisecond)
+}
+
+func TestScheduleEveryImmediateJitterAbandonsPendingRunOnShutdown(t *testing.T) {
+	w := NewWorker(1)
+
+	var runs atomic.Int32
+	// The random first-run delay lives in [0, 1h), so it is virtually certain
+	// to still be pending when shutdown begins.
+	w.ScheduleEveryImmediateJitter("test", time.Hour, time.Hour, func(context.Context) error {
+		runs.Add(1)
+		return nil
+	})
+
+	time.Sleep(200 * time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	require.NoError(t, w.Shutdown(ctx))
+
+	assert.Zero(t, runs.Load(), "jittered first run must not execute after shutdown")
+}
