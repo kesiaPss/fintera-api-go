@@ -206,6 +206,12 @@ func main() {
 func setupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 	router := gin.New()
 
+	// Cap multipart buffering at 8 MiB in memory; larger file parts spill to
+	// temporary files on disk. This applies to handlers that read uploads
+	// through Gin's c.FormFile/c.MultipartForm; handlers that call
+	// ParseMultipartForm explicitly pass their own (equally small) bounds.
+	router.MaxMultipartMemory = 8 << 20
+
 	// Global middleware
 	if cfg.RollbarToken != "" {
 		router.Use(rollbarRecoveryMiddleware())
@@ -229,6 +235,11 @@ func setupRouter(h *handlers.Handlers, cfg *config.Config) *gin.Engine {
 
 	// API v1 routes
 	v1 := router.Group("/api/v1")
+
+	// Bound the bytes read from JSON request bodies (zip-bomb-free, memory
+	// predictable). Multipart uploads are exempt: each upload endpoint already
+	// applies its own MaxBytesReader and per-file limits.
+	v1.Use(middleware.BodyLimit(cfg.MaxJSONBodyBytes))
 	{
 		// Redirect root to swagger
 		router.GET("/", func(c *gin.Context) {
@@ -579,12 +590,19 @@ func scheduleJobs(worker *jobs.Worker, svcs *services.Services, backfillRunner *
 		return nil
 	})
 
-	// Use ScheduleEveryImmediate so jobs run once on startup (e.g. after Railway deploy/restart),
-	// then at the given interval. Plain ScheduleEvery would wait for the first interval before
-	// running, so with restarts or long intervals (8h, 12h) jobs might never run.
+	// Use ScheduleEveryImmediate(Jitter) so jobs run once soon after startup
+	// (e.g. after Railway deploy/restart), then at the given interval. Plain
+	// ScheduleEvery would wait for the first interval before running, so with
+	// restarts or long intervals (8h, 12h) jobs might never run.
+	//
+	// Heavy jobs get a randomized first-run delay (up to 90s) instead of all
+	// firing in the same second: on a 1 GB container the simultaneous startup
+	// scans were themselves a memory spike, and the jitter also desynchronizes
+	// replicas. First runs may therefore land up to 90s late - deliberate, do
+	// not "fix" it back to immediate.
 
 	// Check overdue payments every 12 hours
-	worker.ScheduleEveryImmediate("overdue_payments", 12*time.Hour, func(ctx context.Context) error {
+	worker.ScheduleEveryImmediateJitter("overdue_payments", 12*time.Hour, 90*time.Second, func(ctx context.Context) error {
 		logger.Debug("[Job] Checking overdue payments...")
 		// 1. Calculate and apply overdue interest
 		if err := svcs.Payment.CalculateOverdueInterest(ctx); err != nil {
@@ -596,7 +614,7 @@ func scheduleJobs(worker *jobs.Worker, svcs *services.Services, backfillRunner *
 	})
 
 	// Update credit scores every 8 hours
-	worker.ScheduleEveryImmediate("credit_scores", 8*time.Hour, func(ctx context.Context) error {
+	worker.ScheduleEveryImmediateJitter("credit_scores", 8*time.Hour, 90*time.Second, func(ctx context.Context) error {
 		logger.Debug("[Job] Updating credit scores...")
 		return svcs.CreditScore.UpdateAllScores(ctx)
 	})
@@ -608,19 +626,19 @@ func scheduleJobs(worker *jobs.Worker, svcs *services.Services, backfillRunner *
 	})
 
 	// Release unpaid reservations every 8 hours
-	worker.ScheduleEveryImmediate("release_unpaid_reservations", 8*time.Hour, func(ctx context.Context) error {
+	worker.ScheduleEveryImmediateJitter("release_unpaid_reservations", 8*time.Hour, 90*time.Second, func(ctx context.Context) error {
 		logger.Debug("[Job] Releasing unpaid reservations...")
 		return svcs.Contract.ReleaseUnpaidReservations(ctx)
 	})
 
 	// Nudge customers whose 48h hold is about to expire without a voucher.
-	worker.ScheduleEveryImmediate("reservation_voucher_reminders", 8*time.Hour, func(ctx context.Context) error {
+	worker.ScheduleEveryImmediateJitter("reservation_voucher_reminders", 8*time.Hour, 90*time.Second, func(ctx context.Context) error {
 		logger.Debug("[Job] Sending reservation voucher reminders...")
 		return svcs.Contract.SendReservationVoucherReminders(ctx)
 	})
 
 	// Daily payment reminder emails for active users with active contracts
-	worker.ScheduleEveryImmediate("payment_reminder_emails", 24*time.Hour, func(ctx context.Context) error {
+	worker.ScheduleEveryImmediateJitter("payment_reminder_emails", 24*time.Hour, 90*time.Second, func(ctx context.Context) error {
 		logger.Debug("[Job] Sending daily payment reminder emails...")
 		if err := svcs.Payment.SendDailyPaymentReminderEmails(ctx); err != nil {
 			return err
@@ -630,13 +648,13 @@ func scheduleJobs(worker *jobs.Worker, svcs *services.Services, backfillRunner *
 
 	// Expire overdue pending assignments and reassign the reservation every 5
 	// minutes. Runs once on startup to catch downtime.
-	worker.ScheduleEveryImmediate("expire_overdue_seller_assignments", 5*time.Minute, func(ctx context.Context) error {
+	worker.ScheduleEveryImmediateJitter("expire_overdue_seller_assignments", 5*time.Minute, 90*time.Second, func(ctx context.Context) error {
 		logger.Debug("[Job] Expiring overdue seller assignments...")
 		return svcs.Assignment.ExpireOverdue(ctx)
 	})
 
 	// Nightly seller score recomputation from the 90-day assignment window.
-	worker.ScheduleEveryImmediate("seller_score_recompute", 24*time.Hour, func(ctx context.Context) error {
+	worker.ScheduleEveryImmediateJitter("seller_score_recompute", 24*time.Hour, 90*time.Second, func(ctx context.Context) error {
 		logger.Debug("[Job] Recomputing seller scores...")
 		return svcs.Score.RecomputeAll(ctx)
 	})

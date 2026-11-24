@@ -109,7 +109,7 @@ func (h *ProjectHandler) Create(c *gin.Context) {
 	var project models.Project
 
 	if err := BindNestedOrFlat(c, "project", &project); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON format: " + err.Error()})
+		WriteBindError(c, err, "Invalid JSON format: ")
 		return
 	}
 
@@ -137,7 +137,7 @@ func (h *ProjectHandler) Update(c *gin.Context) {
 	var project models.Project
 
 	if err := BindNestedOrFlat(c, "project", &project); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON format: " + err.Error()})
+		WriteBindError(c, err, "Invalid JSON format: ")
 		return
 	}
 
@@ -399,7 +399,7 @@ func (h *LotHandler) Create(c *gin.Context) {
 	var lot models.Lot
 
 	if err := BindNestedOrFlat(c, "lot", &lot); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON format: " + err.Error()})
+		WriteBindError(c, err, "Invalid JSON format: ")
 		return
 	}
 
@@ -429,7 +429,7 @@ func (h *LotHandler) Update(c *gin.Context) {
 	var lot models.Lot
 
 	if err := BindNestedOrFlat(c, "lot", &lot); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON format: " + err.Error()})
+		WriteBindError(c, err, "Invalid JSON format: ")
 		return
 	}
 

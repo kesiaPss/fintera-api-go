@@ -12,21 +12,77 @@ import (
 )
 
 // incomeFlowFakePaymentRepository is a small payment fake that embeds the
-// repository interface and records the query received by the report builder.
+// repository interface and records the scope received by the report builder's
+// batched paid-payment stream. It emulates the SQL scope/date predicates in
+// Go so fixtures stay declarative.
 type incomeFlowFakePaymentRepository struct {
 	repository.PaymentRepository
 
-	payments  []models.Payment
-	lastQuery *repository.ListQuery
-	err       error
+	payments []models.Payment
+	err      error
+
+	streamed             bool
+	capturedStart        *time.Time
+	capturedEnd          *time.Time
+	capturedProjectID    *uint
+	capturedSellerID     uint
+	capturedFilterSeller bool
+	capturedBatchSize    int
 }
 
-func (f *incomeFlowFakePaymentRepository) List(_ context.Context, query *repository.ListQuery) ([]models.Payment, int64, error) {
-	f.lastQuery = query
+func (f *incomeFlowFakePaymentRepository) StreamPaidForReport(
+	_ context.Context, start, end *time.Time, projectID *uint,
+	sellerID uint, filterBySeller bool, batchSize int,
+	fn func(batch []models.Payment) error,
+) error {
+	f.streamed = true
+	f.capturedStart, f.capturedEnd, f.capturedProjectID = start, end, projectID
+	f.capturedSellerID, f.capturedFilterSeller, f.capturedBatchSize = sellerID, filterBySeller, batchSize
+
 	if f.err != nil {
-		return nil, 0, f.err
+		return f.err
 	}
-	return f.payments, int64(len(f.payments)), nil
+
+	selected := make([]models.Payment, 0, len(f.payments))
+	for _, payment := range f.payments {
+		if projectID != nil && payment.Contract.Lot.ProjectID != *projectID {
+			continue
+		}
+		if filterBySeller && sellerID > 0 {
+			sellerMatch := payment.Contract.SellerID != nil && *payment.Contract.SellerID == sellerID
+			creatorMatch := payment.Contract.CreatorID != nil && *payment.Contract.CreatorID == sellerID
+			if !sellerMatch && !creatorMatch {
+				continue
+			}
+		}
+		if start != nil || end != nil {
+			date := payment.DueDate
+			if payment.PaymentDate != nil {
+				date = *payment.PaymentDate
+			}
+			if start != nil && date.Before(*start) {
+				continue
+			}
+			if end != nil && date.After(*end) {
+				continue
+			}
+		}
+		selected = append(selected, payment)
+	}
+
+	if batchSize <= 0 {
+		batchSize = 1
+	}
+	for begin := 0; begin < len(selected); begin += batchSize {
+		until := begin + batchSize
+		if until > len(selected) {
+			until = len(selected)
+		}
+		if err := fn(selected[begin:until]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // incomeFlowTestPayment builds a paid payment with the preloaded associations
@@ -171,9 +227,10 @@ func TestBuildIncomeFlowReportDetailFiscalData(t *testing.T) {
 	document, err := service.BuildIncomeFlowReport(context.Background(), ReportExportFilters{})
 
 	require.NoError(t, err)
-	require.NotNil(t, paymentRepo.lastQuery)
-	assert.Equal(t, models.PaymentStatusPaid, paymentRepo.lastQuery.Filters["status"])
-	assert.Zero(t, paymentRepo.lastQuery.PerPage, "detail includes every payment of the period")
+	require.True(t, paymentRepo.streamed, "the detail must come from the batched stream")
+	assert.Nil(t, paymentRepo.capturedStart, "no date filter when the period is unfiltered")
+	assert.Nil(t, paymentRepo.capturedEnd)
+	assert.Equal(t, repository.PaymentScanBatchSize, paymentRepo.capturedBatchSize)
 
 	section := operationsReportSection(t, document, "Detalle de Cobranzas")
 	require.Len(t, section.Rows, 3, "rows are ordered by payment date ascending")
@@ -238,9 +295,15 @@ func TestBuildIncomeFlowReportDetailFiltersProjectAndSeller(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotNil(t, document)
-	require.NotNil(t, paymentRepo.lastQuery)
-	assert.Equal(t, "2026-10-01", paymentRepo.lastQuery.Filters["start_date"])
-	assert.Equal(t, "2026-10-31", paymentRepo.lastQuery.Filters["end_date"])
+	require.True(t, paymentRepo.streamed)
+	require.NotNil(t, paymentRepo.capturedStart)
+	require.NotNil(t, paymentRepo.capturedEnd)
+	assert.True(t, paymentRepo.capturedStart.Equal(start))
+	assert.True(t, paymentRepo.capturedEnd.Equal(end))
+	require.NotNil(t, paymentRepo.capturedProjectID)
+	assert.Equal(t, projectID, *paymentRepo.capturedProjectID)
+	assert.True(t, paymentRepo.capturedFilterSeller)
+	assert.Equal(t, uint(7), paymentRepo.capturedSellerID)
 	section := operationsReportSection(t, document, "Detalle de Cobranzas")
 	require.Len(t, section.Rows, 1)
 	assert.Equal(t, "CTR-100", section.Rows[0].Cells[1].Text)

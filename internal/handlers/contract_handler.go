@@ -278,7 +278,9 @@ func (h *ContractHandler) create(c *gin.Context, lotID uint, guest bool) {
 	}
 
 	// 2. Parse Form Data
-	if err := c.Request.ParseMultipartForm(32 << 20); err != nil { // 32MB max
+	// 8 MiB buffered in memory; larger files spill to temp files on disk. The
+	// per-file size limit is enforced separately in the service.
+	if err := c.Request.ParseMultipartForm(8 << 20); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Error parsing form data: " + err.Error()})
 		return
 	}
@@ -708,7 +710,16 @@ func (h *ContractHandler) Update(c *gin.Context) {
 
 	var bodyBytes []byte
 	if c.Request.Body != nil {
-		bodyBytes, _ = io.ReadAll(c.Request.Body)
+		var readErr error
+		bodyBytes, readErr = io.ReadAll(c.Request.Body)
+		if readErr != nil {
+			if IsBodyTooLarge(readErr) {
+				c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "El cuerpo de la solicitud excede el tamaño máximo permitido"})
+				return
+			}
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Error leyendo el cuerpo de la solicitud: " + readErr.Error()})
+			return
+		}
 	}
 	// Restore body for future binding
 	c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))

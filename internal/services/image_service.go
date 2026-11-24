@@ -1,7 +1,9 @@
 package services
 
 import (
+	"bytes"
 	"fmt"
+	"image"
 	"io"
 	"mime/multipart"
 	"os"
@@ -35,9 +37,20 @@ func NewImageService(uploadDir string) *ImageService {
 	}
 }
 
+// Image dimension budget for profile pictures. A compressed image can declare
+// far more pixels than its bytes cost to transport; decoding it would expand
+// into width*height*4 bytes of RGBA. The caps keep the worst-case decode under
+// roughly 256 MB of pixel memory (4096²) and typical uploads far below that,
+// while still accepting any sane photo (16 MP total).
+const (
+	maxAvatarDimensionPixels = 4096
+	maxAvatarTotalPixels     = 16_000_000
+)
+
 // ProcessAndSaveProfilePicture stores the profile picture as a WebP image and
 // creates a WebP thumbnail. Both files are re-encoded from the uploaded raster
-// image; the original upload is not kept.
+// image; the original upload is not kept. The dimension gate runs before the
+// full decode so a pixel bomb cannot expand into hundreds of MB of memory.
 func (s *ImageService) ProcessAndSaveProfilePicture(file multipart.File, header *multipart.FileHeader) (originalPath, thumbnailPath string, err error) {
 	if s.root == nil {
 		return "", "", fmt.Errorf("almacenamiento de imágenes no disponible")
@@ -52,6 +65,19 @@ func (s *ImageService) ProcessAndSaveProfilePicture(file multipart.File, header 
 	data, err := io.ReadAll(file)
 	if err != nil {
 		return "", "", fmt.Errorf("error al leer archivo: %w", err)
+	}
+
+	// Validate dimensions BEFORE decoding the full bitmap: header-only decode
+	// so a pixel bomb cannot expand into hundreds of MB of memory in the WebP
+	// pipeline that follows.
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return "", "", fmt.Errorf("error al leer la cabecera de la imagen: %w", err)
+	}
+	if cfg.Width <= 0 || cfg.Height <= 0 ||
+		cfg.Width > maxAvatarDimensionPixels || cfg.Height > maxAvatarDimensionPixels ||
+		int64(cfg.Width)*int64(cfg.Height) > maxAvatarTotalPixels {
+		return "", "", fmt.Errorf("la imagen excede las dimensiones máximas permitidas (%d×%d px)", maxAvatarDimensionPixels, maxAvatarDimensionPixels)
 	}
 
 	original, thumbnail, err := ProfileToWebP(data)

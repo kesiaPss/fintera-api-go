@@ -75,6 +75,10 @@ func (m *mockDocContractRepo) List(context.Context, *repository.ContractQuery) (
 	return nil, 0, nil
 }
 
+func (m *mockDocContractRepo) StreamForCommissions(context.Context, *repository.ContractQuery, int, func([]models.Contract) error) error {
+	return nil
+}
+
 func (m *mockDocContractRepo) FindActiveByLot(context.Context, uint) (*models.Contract, error) {
 	return nil, nil
 }

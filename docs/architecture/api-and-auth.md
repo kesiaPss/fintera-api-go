@@ -301,6 +301,11 @@ promoted to a person-level document.
   `page`, `per_page`, `total`, `total_pages`; some lists only return `total`.
 - `sort` format is `field-direction`, e.g. `created_at-desc`.
 - Date filters use `YYYY-MM-DD` unless the handler documents otherwise.
+- JSON request bodies are capped globally at `MAX_JSON_BODY_BYTES` (default
+  2 MiB). Endpoints that read the body directly answer `413` with a Spanish
+  error; endpoints using Gin binding surface the cap as a `400` binding error.
+  Multipart uploads are exempt from this cap and enforce their own
+  per-endpoint body and per-file limits.
 - Contract creation uses `multipart/form-data` with a JSON `contract` field,
   optional JSON `user` field, the applicant's `identity_document` (DNI) and
   `rtn_document` files, and optional `documents[N]` attachments. The two typed

@@ -2,11 +2,14 @@ package handlers
 
 import (
 	"bytes"
+	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type TestStruct struct {
@@ -93,4 +96,49 @@ func TestBindNestedOrFlat(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestBindNestedOrFlatOversizedBodyAnswers413 verifies the BodyLimit
+// middleware's MaxBytesReader error surfaces as ErrBodyTooLarge and
+// WriteBindError answers 413 with the Spanish message.
+func TestBindNestedOrFlatOversizedBodyAnswers413(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	body := `{"name": "` + strings.Repeat("a", 2048) + `"}`
+	c.Request = httptest.NewRequest("POST", "/", bytes.NewBufferString(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	// Simulate what middleware.BodyLimit installs.
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 100)
+
+	var result TestStruct
+	err := BindNestedOrFlat(c, "data", &result)
+	require.ErrorIs(t, err, ErrBodyTooLarge)
+	assert.True(t, IsBodyTooLarge(err))
+
+	WriteBindError(c, err, "Datos inválidos: ")
+
+	assert.Equal(t, http.StatusRequestEntityTooLarge, w.Code)
+	assert.Contains(t, w.Body.String(), "excede el tamaño máximo permitido")
+}
+
+// TestWriteBindErrorKeeps400ForInvalidJSON verifies ordinary binding failures
+// keep the handler's 400 message prefix.
+func TestWriteBindErrorKeeps400ForInvalidJSON(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("POST", "/", bytes.NewBufferString(`{"age": "invalid"}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	var result TestStruct
+	err := BindNestedOrFlat(c, "data", &result)
+	require.Error(t, err)
+
+	WriteBindError(c, err, "Datos inválidos: ")
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "Datos inválidos: ")
 }

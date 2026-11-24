@@ -21,6 +21,7 @@ type overdueTestRepository struct {
 	payments []models.Payment
 	err      error
 	calls    int
+	scope    overdueCapturedScope
 }
 
 func (r *overdueTestRepository) FindOverdueForActiveContractsDetailed(context.Context) ([]models.Payment, error) {
@@ -37,6 +38,60 @@ func (r *overdueTestRepository) FindOverdueForActiveContractsDetailed(context.Co
 		}
 	}
 	return active, nil
+}
+
+// capturedScope records the last seller/project scope the report requested so
+// tests can assert the batched stream receives it.
+type overdueCapturedScope struct {
+	projectID      *uint
+	sellerID       uint
+	filterBySeller bool
+	batchSize      int
+	batches        int
+}
+
+func (r *overdueTestRepository) StreamOverdueForActiveContractsDetailed(ctx context.Context, projectID *uint, sellerID uint, filterBySeller bool, batchSize int, fn func(batch []models.Payment) error) error {
+	payments, err := r.FindOverdueForActiveContractsDetailed(ctx)
+	if err != nil {
+		return err
+	}
+
+	// Mirror the SQL seller/project scoping so fixtures with mixed owners are
+	// filtered exactly as the export expects.
+	scoped := make([]models.Payment, 0, len(payments))
+	for _, payment := range payments {
+		if filterBySeller && sellerID > 0 {
+			contract := payment.Contract
+			sellerMatch := contract.SellerID != nil && *contract.SellerID == sellerID
+			creatorMatch := contract.CreatorID != nil && *contract.CreatorID == sellerID
+			if !sellerMatch && !creatorMatch {
+				continue
+			}
+		}
+		if projectID != nil && payment.Contract.Lot.ProjectID != *projectID {
+			continue
+		}
+		scoped = append(scoped, payment)
+	}
+
+	r.scope = overdueCapturedScope{projectID: projectID, sellerID: sellerID, filterBySeller: filterBySeller, batchSize: batchSize}
+	if batchSize <= 0 {
+		batchSize = len(scoped)
+	}
+	if batchSize == 0 {
+		return nil
+	}
+	for start := 0; start < len(scoped); start += batchSize {
+		end := start + batchSize
+		if end > len(scoped) {
+			end = len(scoped)
+		}
+		r.scope.batches++
+		if err := fn(scoped[start:end]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // overdueTestContract builds an active contract with the fiscal, balance and

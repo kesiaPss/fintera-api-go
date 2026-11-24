@@ -363,3 +363,29 @@ func TestBuildCommissionsReportGroupsUnknownSellerAsSinVendedor(t *testing.T) {
 	require.Len(t, section.Rows, 1)
 	assert.InDelta(t, 4000.0, commissionsTestMoney(t, section.Rows[0].Cells[8]), 0.01)
 }
+
+// TestGenerateCommissionsSpansMultipleBatches proves the keyset stream feeds
+// every contract to the builder across batch boundaries: a fixture larger than
+// the batch size yields exactly one item per contract, in input order.
+func TestGenerateCommissionsSpansMultipleBatches(t *testing.T) {
+	const total = repository.PaymentScanBatchSize*2 + 7
+	accrual := time.Date(2026, 10, 5, 0, 0, 0, 0, time.UTC)
+
+	contracts := make([]models.Contract, 0, total)
+	for i := 0; i < total; i++ {
+		contracts = append(contracts, commissionsTestContract(
+			uint(1000+i), nil, "", "Cliente", "Lote", "Proyecto", 1000, 40, accrual, nil,
+		))
+	}
+
+	reportSvc := NewReportService(nil, commissionsTestContractRepo(contracts, nil), nil, nil)
+
+	items, err := reportSvc.GenerateCommissions(context.Background(), "", "", 0, false)
+	require.NoError(t, err)
+	require.Len(t, items, total, "every contract across all batches is reported")
+
+	// Order must match the fixture order (created_at DESC surrogate).
+	for i := range items {
+		assert.Equal(t, uint(1000+i), items[i].ContractID)
+	}
+}

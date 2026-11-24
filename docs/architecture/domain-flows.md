@@ -225,13 +225,19 @@ FSM `pending → readjustment`, used to mark a payment that needs re-terming.
 
 Scheduled in `cmd/api/main.go` (`scheduleJobs`) with
 `Worker.ScheduleEveryImmediate`, which runs once at startup then at the given
-interval.
+interval. The analytics cache refresh is the only job that runs immediately at
+startup; the heavier jobs use `Worker.ScheduleEveryImmediateJitter`, which
+delays the first run by a random offset (up to 90 seconds) so a restart or
+deploy does not fire every scan in the same second. On a memory-constrained
+container that simultaneous startup burst was itself a spike, and the jitter
+also desynchronizes replicas. First runs of those jobs may therefore land up to
+90 seconds late; interval cadence is unchanged.
 
 | Interval | Job | Function |
 | --- | --- | --- |
 | 12 hours | Overdue interest + notifications | `Payment.CalculateOverdueInterest`, `Payment.CheckOverduePayments` |
 | 8 hours | Credit scores | `CreditScore.UpdateAllScores` |
-| 15 minutes | Analytics cache refresh | `Analytics.RefreshCache` |
+| 15 minutes | Analytics cache refresh | `Analytics.RefreshCache` (immediate first run) |
 | 8 hours | Release unpaid reservations | `Contract.ReleaseUnpaidReservations` |
 | 24 hours | Payment reminder emails | `Payment.SendDailyPaymentReminderEmails`, `Payment.SendDailyUpcomingPaymentReminderEmails` |
 
@@ -244,8 +250,20 @@ Worker characteristics (`internal/jobs/worker.go`):
   which converts panics into errors, reports them to Rollbar, and keeps the
   worker alive.
 - `ScheduleEvery` waits for the first interval; `ScheduleEveryImmediate` does
-  not.
+  not; `ScheduleEveryImmediateJitter` waits a random offset within `maxJitter`
+  and abandons the pending first run if the worker shuts down during it.
+- The overdue interest and notification jobs stream their dataset in keyset
+  batches of `repository.PaymentScanBatchSize` (500) via
+  `PaymentRepository.FindOverdueInBatches`, flushing ledger and payment updates
+  per batch so memory does not grow with the number of overdue installments.
+  Notification dedupe is preserved across batches (one `payment_overdue`
+  notification per user per run).
 - Stats are exposed by `GET /api/v1/jobs/status` (admin).
+
+Contract listings attach each contract's next collectable payment with a single
+`DISTINCT ON (contract_id)` query that reads at most one payment row per
+contract (earliest due date, then lowest id), instead of scanning every
+collectable installment on the page.
 
 ### One-off backfills
 
@@ -274,6 +292,21 @@ titles, column headers, statuses, and filenames such as
 `reporte_operaciones_2026-10.xlsx`. Client-level detail includes the identity,
 the RTN, and the bank reference (authorization number or payer account name)
 when the source record provides them, leaving the columns empty otherwise.
+
+Export memory is bounded end to end. Seller/project scoping is applied in the
+data query (`project_id`/`seller_id` filters on the payment `List`, scoped
+overdue stream), never as a Go-side filter pass, and the row-heavy detail
+sections read in keyset batches of `repository.PaymentScanBatchSize` (500):
+the commissions export streams contracts through a lean query that skips the
+page-list extras (`TotalPaid`, next payments), the income-flow collection
+detail streams paid payments, and the overdue export streams its aging
+dataset while accumulating bucket counters per batch. The rendered file is
+streamed straight to the HTTP response (`RenderReportTo`): CSV writes through
+`csv.Writer`, PDF through `pdf.Output(w)` and XLSX through excelize
+`StreamWriter` (with sheet-level properties set via the stream so merges,
+widths and the frozen header pane are preserved). Response bytes, filenames
+and content types are unchanged; document-build errors still return JSON 500
+before any file bytes are written.
 
 The four exports live under `/reports/*_export` (admin and seller; sellers are
 scoped to their own operations):

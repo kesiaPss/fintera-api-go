@@ -67,6 +67,7 @@ Source: `internal/config/config.go`.
 | `JWT_EXPIRATION_HOURS` | `24` | JWT lifetime |
 | `STORAGE_PATH` | `./storage` | Local upload root |
 | `IDENTITY_DOCUMENTS_REQUIRED` | `false` | When `true`, a contract cannot be created unless its applicant has a DNI and an RTN on file. Keep it `false` until both frontends send the new fields |
+| `MAX_JSON_BODY_BYTES` | `2097152` | Max JSON request body in bytes (multipart uploads exempt) |
 | `WORKER_COUNT` | `5` | Background worker consumers |
 | `ALLOWED_ORIGINS` | `*` | Comma-separated CORS origins |
 | `APP_URL` | `https://fintera.securexapp.com` | Used in internal/admin email links |
