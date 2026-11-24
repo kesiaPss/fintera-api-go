@@ -224,6 +224,14 @@ stored under the contract before this change.
 - **THEN** the response also contains those entries
 - **AND** each legacy entry is marked as read-only and without a kind
 
+#### Scenario: A new contract's attachments become legacy entries immediately
+
+- **WHEN** a contract is created with `documents[N]` attachments
+- **THEN** the API creates one read-only legacy entry per stored attachment at
+  creation time, pointing at the path the upload wrote
+- **AND** the entry carries the file name and the size read from disk
+- **AND** no file is copied or moved
+
 #### Scenario: The contract owner is not a caller
 
 - **WHEN** the owner of the contract lists its identity documents
@@ -251,7 +259,8 @@ scope as the contract listing.
 
 - **WHEN** a seller downloads the content of a document that belongs to a
   contract out of its scope
-- **THEN** the API responds `403`
+- **THEN** the API responds `404`
+- **AND** serves no bytes
 
 ### Requirement: Person-level identity documents are admin only, or within a seller's scope
 
@@ -309,16 +318,23 @@ so the browser can render it.
 - **THEN** the API responds `200` with the original served inline
 - **AND** the response is not labeled as a WebP preview
 
-#### Scenario: Unauthorized caller
+#### Scenario: An anonymous caller
 
-- **WHEN** an anonymous or out-of-scope caller requests the content
-- **THEN** the API responds `401` or `403` and serves no bytes
+- **WHEN** a caller without a session requests the content
+- **THEN** the API responds `401`
+
+#### Scenario: An out-of-scope caller
+
+- **WHEN** a caller who is not an admin and not a seller in scope requests the
+  content or the preview of a document
+- **THEN** the API responds `404`
+- **AND** serves no bytes
 
 #### Scenario: The contract owner is not a caller
 
 - **WHEN** the owner of the contract requests the content or the preview of an
   identity document of that contract
-- **THEN** the API responds `403`
+- **THEN** the API responds `404`
 - **AND** serves no bytes
 
 ### Requirement: Identity documents are not publicly served
