@@ -58,6 +58,15 @@ a deliberate privacy decision and it is now pinned by scenarios in the spec,
 so it cannot be reintroduced by a later reader who assumes symmetry with
 `ShowByGUID`.
 
+**The two statuses are deliberately different, and they go together.** The
+contract-scoped routes are addressed by a `guid` the caller may already be
+looking at, so an out-of-scope seller answers `403` there — the resource is
+known to them. The content and preview endpoints are addressed by a document
+id, which is the only enumeration surface, so they answer `404` for anyone who
+is not an admin and not a seller in scope: a `404` does not confirm that the
+document exists, and for the owner that is the strongest form of "no route to
+read them back". Both serve no bytes.
+
 ---
 
 ## The corrections
