@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"errors"
 
 	"github.com/sjperalta/fintera-api/pkg/logger"
@@ -35,6 +36,17 @@ var (
 	ErrHistoricalSaleInvalid      = errors.New("datos de la venta histórica inválidos")
 	ErrHistoricalSaleDuplicate    = errors.New("ya existe una venta histórica con esa identidad y fecha")
 )
+
+// lookupError classifies a failed repository lookup. A missing row is
+// ErrNotFound, but an aborted caller is not: context.Canceled must keep
+// traveling so the handler ends the request as 499 instead of inventing a 404
+// for a resource that exists (the portal retries and gets a 200).
+func lookupError(err error) error {
+	if errors.Is(err, context.Canceled) {
+		return err
+	}
+	return ErrNotFound
+}
 
 // logIgnoredError records a non-critical error without interrupting the main flow.
 func logIgnoredError(action string, err error) {
