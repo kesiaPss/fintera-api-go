@@ -52,6 +52,21 @@ Useful URLs:
 - Swagger UI: `http://localhost:8081/swagger/index.html`
 - Uploaded files: `http://localhost:8081/uploads/...`
 
+## Capturing logs to a file
+
+Dev logs go to stdout, so a busy terminal truncates and scrolls away the lines
+you need. `LOG_FILE` writes a second copy of every structured record:
+
+```bash
+LOG_FILE=trace.log make dev    # or make run, or go run ./cmd/api
+grep '"level":"ERROR"' trace.log
+```
+
+Records keep their JSON (or `LOG_FORMAT=text`) shape in the file, so `SQL Error`,
+`Slow SQL`, and `Incoming request` lines stay greppable with their full `sql`,
+`error`, `route`, and `status` fields. The file is git-ignored and appended to
+across hot reloads; delete it to start clean.
+
 ## Environment variables
 
 Source: `internal/config/config.go`.
@@ -62,6 +77,7 @@ Source: `internal/config/config.go`.
 | `ENVIRONMENT` | `development` | `production` enables Gin release mode and JSON logs |
 | `LOG_FORMAT` | JSON | `text` switches to human-readable logs (local use) |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error`. Routine SQL and per-run job completions log at `debug`; set `debug` to see them |
+| `LOG_FILE` | unset | Path that receives a copy of every record in addition to stdout, e.g. `LOG_FILE=trace.log make dev`. Created if missing, appended across restarts; an unusable path warns on stderr and keeps stdout logging |
 | `DATABASE_URL` | — | **Required** PostgreSQL URL |
 | `JWT_SECRET` | dev fallback | Required in production |
 | `JWT_EXPIRATION_HOURS` | `24` | JWT lifetime |
@@ -96,7 +112,7 @@ For step-by-step Resend setup (local test inbox, staging and production), see
 | `make tools` | Install `air`, `swag`, `migrate`, `golangci-lint`, `gosec` |
 | `make build` | Build `bin/api` |
 | `make run` | Build and run `bin/api` |
-| `make dev` | Hot reload with `air` |
+| `make dev` | Hot reload with `air` (add `LOG_FILE=path` for a file copy) |
 | `make test` | `go test -v ./...` |
 | `make test-cover` | Coverage profile + HTML report |
 | `make fmt` | `go fmt ./...` |

@@ -129,7 +129,9 @@ scheduler.
 
 - **Logs:** structured `slog`. JSON in production, text elsewhere, written to
   stdout. `LOG_FORMAT=text` forces text; `LOG_LEVEL` (default `info`) controls
-  verbosity.
+  verbosity. `LOG_FILE` additionally duplicates every record to that path — a
+  local debugging aid only; deployed logging must keep flowing to stdout for the
+  platform collector, and the file is not rotated.
 - **Request logs** (`Incoming request`) carry `requestId`, `method`, `route`
   (Gin route template, e.g. `/api/v1/projects/:project_id`), `status`,
   `durationMs`, `ip`, `user_agent`, and `user_id` when authenticated. The raw
