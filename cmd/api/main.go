@@ -60,6 +60,7 @@ func main() {
 
 	// Initialize logger
 	logger.Setup(cfg.Environment)
+	defer logger.Close()
 
 	// Initialize Rollbar when token is configured
 	if cfg.RollbarToken != "" {

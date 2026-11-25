@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -73,6 +74,17 @@ type ErrIdentityDocumentSize struct {
 
 func (e ErrIdentityDocumentSize) Error() string {
 	return fmt.Sprintf("el archivo %q supera el tamaño máximo de %d MB", e.Filename, e.Max/(1024*1024))
+}
+
+// lookupError classifies a failed repository lookup. A missing row is
+// ErrNotFound, but an aborted caller is not: context.Canceled must keep
+// traveling so the handler ends the request as 499 instead of inventing a 404
+// for a resource that exists (the portal retries and gets a 200).
+func lookupError(err error) error {
+	if errors.Is(err, context.Canceled) {
+		return err
+	}
+	return ErrNotFound
 }
 
 // logIgnoredError records a non-critical error without interrupting the main flow.

@@ -135,17 +135,24 @@ scheduler.
 
 - **Logs:** structured `slog`. JSON in production, text elsewhere, written to
   stdout. `LOG_FORMAT=text` forces text; `LOG_LEVEL` (default `info`) controls
-  verbosity.
+  verbosity. `LOG_FILE` additionally duplicates every record to that path — a
+  local debugging aid only; deployed logging must keep flowing to stdout for the
+  platform collector, and the file is not rotated.
 - **Request logs** (`Incoming request`) carry `requestId`, `method`, `route`
   (Gin route template, e.g. `/api/v1/projects/:project_id`), `status`,
   `durationMs`, `ip`, `user_agent`, and `user_id` when authenticated. The raw
   path and query string are not logged. The `X-Request-ID` request header is
   kept when it is 1–128 letters, digits, `.`, `_`, or `-`; otherwise a new ID is
   generated. The ID is returned in the `X-Request-ID` response header, so it can
-  be matched with proxy access logs. 5xx logs at error, 4xx at warn.
+  be matched with proxy access logs. 5xx logs at error, 4xx at warn. A client
+  that disconnects mid-request ends as 499 (nginx "client closed request") with
+  no body on the public catalog routes, instead of a misleading 404/500.
 - **SQL logs:** `Slow SQL` (above 200 ms) and `SQL Error` lines include the
   duration in the message and the parameterized query in `sql` (`$1`, `$2`
   placeholders; bind values are never logged), plus `durationMs` and `rows`.
+  `record not found` and `context canceled` are normal control flow (cache misses
+  and clients that hung up) and log at `debug` as `SQL record not found` /
+  `SQL client canceled`, never as `SQL Error`.
   Routine statements log at `debug`; use `LOG_LEVEL=debug` to see them. When
   `ENVIRONMENT=production`, GORM is fully silent (no SQL lines at all). Any other
   value, including an unset variable, enables SQL logging.
