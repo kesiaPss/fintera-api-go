@@ -64,8 +64,9 @@ grep '"level":"ERROR"' trace.log
 
 Records keep their JSON (or `LOG_FORMAT=text`) shape in the file, so `SQL Error`,
 `Slow SQL`, and `Incoming request` lines stay greppable with their full `sql`,
-`error`, `route`, and `status` fields. The file is git-ignored and appended to
-across hot reloads; delete it to start clean.
+`error`, `route`, and `status` fields. The file is created owner-read/write only
+(`0600`), is git-ignored, and is appended to across hot reloads; delete it to start
+clean.
 
 ## Environment variables
 

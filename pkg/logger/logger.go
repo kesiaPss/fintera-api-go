@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -61,7 +62,13 @@ func logOutput() io.Writer {
 
 	closeFile()
 
-	opened, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	// LOG_FILE is operator-supplied startup configuration at the same trust level
+	// as DATABASE_URL or STORAGE_PATH: it never carries request data, so the
+	// file-inclusion and traversal rules do not apply. The path is still cleaned,
+	// and the file is created owner-read/write only, because captured records can
+	// contain user IDs and route paths.
+	// #nosec G304 G703
+	opened, err := os.OpenFile(filepath.Clean(path), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "logger: LOG_FILE %q is not usable (%v); logging to stdout only\n", path, err)
 		return os.Stdout
