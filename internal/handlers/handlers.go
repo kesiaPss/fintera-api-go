@@ -60,7 +60,7 @@ func NewHandlers(svcs *services.Services, storage *storage.LocalStorage) *Handle
 		Score:            NewScoreHandler(svcs.Score),
 		Seller:           NewSellerHandler(svcs.Seller),
 		Commission:       NewCommissionHandler(svcs.Commission),
-		HistoricalSale:   NewHistoricalSaleHandler(svcs.HistoricalSale),
+		HistoricalSale:   NewHistoricalSaleHandler(svcs.HistoricalSale, storage),
 		IdentityDocument: NewIdentityDocumentHandler(svcs.IdentityDocument),
 	}
 }
